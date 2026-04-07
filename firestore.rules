@@ -120,11 +120,12 @@ service cloud.firestore {
     }
 
     function isValidWarehouse() {
-      return hasOnlyAllowedFields(['id', 'name', 'location', 'createdAt']) &&
-             hasRequiredFields(['id', 'name', 'location', 'createdAt']) &&
+      return hasOnlyAllowedFields(['id', 'name', 'location', 'locationUrl', 'createdAt']) &&
+             hasRequiredFields(['id', 'name', 'createdAt']) &&
              request.resource.data.id is string &&
              request.resource.data.name is string && request.resource.data.name.size() < 100 &&
-             request.resource.data.location is string && request.resource.data.location.size() < 200 &&
+             (!('location' in request.resource.data) || (request.resource.data.location is string && request.resource.data.location.size() < 200)) &&
+             (!('locationUrl' in request.resource.data) || (request.resource.data.locationUrl is string && request.resource.data.locationUrl.size() < 500)) &&
              request.resource.data.createdAt is string;
     }
 
@@ -151,11 +152,13 @@ service cloud.firestore {
     }
 
     function isValidTransaction() {
-      return hasOnlyAllowedFields(['id', 'itemId', 'itemName', 'type', 'quantity', 'projectName', 'driverName', 'carNumber', 'guardName', 'notes', 'date', 'user']) &&
+      return hasOnlyAllowedFields(['id', 'itemId', 'itemName', 'warehouseId', 'warehouseName', 'type', 'quantity', 'projectName', 'driverName', 'carNumber', 'guardName', 'notes', 'date', 'user']) &&
              hasRequiredFields(['id', 'itemId', 'itemName', 'type', 'quantity', 'date', 'user']) &&
              request.resource.data.id is string &&
              request.resource.data.itemId is string &&
              request.resource.data.itemName is string &&
+             (!('warehouseId' in request.resource.data) || request.resource.data.warehouseId is string) &&
+             (!('warehouseName' in request.resource.data) || request.resource.data.warehouseName is string) &&
              request.resource.data.type in ['in', 'out'] &&
              request.resource.data.quantity is number && request.resource.data.quantity > 0 &&
              (!('projectName' in request.resource.data) || request.resource.data.projectName is string) &&
@@ -195,52 +198,69 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isAuthenticated();
       
-      // Allow user to create their own profile but default to 'user' role unless admin
-      allow create: if isAuthenticated() && isOwner(userId) && isValidUser() && 
-                    (request.resource.data.role == 'user' || isAdmin());
+      // Allow user to create their own profile, and allow admin to manage all profiles.
+      allow create: if isAuthenticated() && isValidUser() && (
+        isAdmin() ||
+        (isOwner(userId) &&
+         request.resource.data.uid == request.auth.uid &&
+         request.resource.data.role == 'user')
+      );
                     
       // Allow admin to update any user, or user to update their own name (but not role)
       allow update: if isAuthenticated() && isValidUser() && (
         isAdmin() || 
         (isOwner(userId) && request.resource.data.role == resource.data.role && request.resource.data.uid == resource.data.uid)
       );
+
+      allow delete: if isAdmin();
     }
 
     match /warehouses/{warehouseId} {
       allow read: if isAuthenticated();
-      allow create, update, delete: if isAdmin() && (request.method == 'delete' || isValidWarehouse());
+      allow create, update: if isAdmin() && isValidWarehouse();
+      allow delete: if isAdmin();
     }
 
     match /categories/{categoryId} {
       allow read: if isAuthenticated();
-      allow create, update, delete: if isAdmin() && (request.method == 'delete' || isValidCategory());
+      allow create, update: if isAdmin() && isValidCategory();
+      allow delete: if isAdmin();
     }
 
     match /items/{itemId} {
       allow read: if isAuthenticated();
-      allow create, delete: if isAdmin() && (request.method == 'delete' || isValidItem());
+      allow create: if isAdmin() && isValidItem();
       allow update: if isAuthenticated() && isValidItem();
+      allow delete: if isAdmin();
     }
 
     match /drivers/{driverId} {
       allow read: if isAuthenticated();
-      allow create, update, delete: if isAdmin() && (request.method == 'delete' || isValidDriver());
+      allow create, update: if isAdmin() && isValidDriver();
+      allow delete: if isAdmin();
     }
 
     match /cars/{carId} {
       allow read: if isAuthenticated();
-      allow create, update, delete: if isAdmin() && (request.method == 'delete' || isValidCar());
+      allow create, update: if isAdmin() && isValidCar();
+      allow delete: if isAdmin();
     }
 
     match /guards/{guardId} {
       allow read: if isAuthenticated();
-      allow create, update, delete: if isAdmin() && (request.method == 'delete' || isValidGuard());
+      allow create, update: if isAdmin() && isValidGuard();
+      allow delete: if isAdmin();
     }
 
     match /transactions/{transactionId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidTransaction();
       allow update, delete: if isAdmin();
+    }
+
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
     }
   }
 }

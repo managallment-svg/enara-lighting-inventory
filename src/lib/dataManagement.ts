@@ -68,8 +68,15 @@ function normalizeDocument(entry: unknown, fallbackId: string) {
 }
 
 async function readCollectionData(database: Firestore, collectionName: string) {
-  const snapshot = await getDocs(collection(database, collectionName));
-  return snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
+  try {
+    const snapshot = await getDocs(collection(database, collectionName));
+    return snapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
+  } catch (error: any) {
+    if (error?.code === 'permission-denied') {
+      throw new Error(`لا تملك صلاحية قراءة مجموعة "${collectionName}" من Firebase. تأكد من تحديث قواعد Firestore.`);
+    }
+    throw error;
+  }
 }
 
 async function commitOperations(database: Firestore, operations: PendingOperation[]) {
