@@ -39,6 +39,8 @@ export default function Login() {
       console.error("Auth error", err);
       if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
         setError('البريد الإلكتروني أو كلمة المرور غير صحيحة');
+      } else if (err.code === 'auth/unauthorized-domain') {
+        setError('هذا الدومين غير مفعّل بعد داخل Firebase Authentication. يرجى إضافة دومين GitHub Pages إلى Authorized Domains.');
       } else {
         setError('حدث خطأ أثناء المصادقة. يرجى المحاولة مرة أخرى.');
       }
@@ -48,21 +50,25 @@ export default function Login() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#f4f7f6] p-4 font-sans" dir="rtl">
+    <div className="flex min-h-[100svh] items-center justify-center bg-[#f4f7f6] p-3 sm:p-4 font-sans" dir="rtl">
       <Card className="w-full max-w-md shadow-2xl border-0 bg-white rounded-3xl overflow-hidden">
-        <CardHeader className="text-center pb-6 pt-10 bg-[#004d40]">
-          <div className="mx-auto mb-5 rounded-[28px] bg-white/95 p-3 shadow-xl shadow-black/10">
-            <img src={brandLogoFull} alt="شعار إنارة ستوك" className="h-auto w-52 max-w-full" />
+        <CardHeader className="bg-[#004d40] pb-4 pt-6 text-center sm:pb-6 sm:pt-8">
+          <div className="mx-auto mb-4 rounded-[24px] bg-white/95 p-2.5 shadow-xl shadow-black/10 sm:mb-5 sm:rounded-[28px] sm:p-3">
+            <img
+              src={brandLogoFull}
+              alt="شعار إنارة ستوك"
+              className="h-auto w-36 max-w-full sm:w-44 md:w-48"
+            />
           </div>
-          <CardTitle className="text-2xl font-black text-white tracking-wider mb-2">
+          <CardTitle className="mb-2 text-xl font-black tracking-wider text-white sm:text-2xl">
             إدارة مخازن إنارة
           </CardTitle>
           <CardDescription className="text-sm font-medium text-white/80">
             مرحباً بك، قم بتسجيل الدخول للمتابعة
           </CardDescription>
         </CardHeader>
-        <CardContent className="px-8 pt-8 pb-8">
-          <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+        <CardContent className="px-6 pb-6 pt-6 sm:px-8 sm:pb-8 sm:pt-8">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4 sm:gap-5">
             {error && (
               <div className="bg-red-50 text-red-600 p-3 rounded-xl text-sm font-medium border border-red-100 text-center">
                 {error}
@@ -105,18 +111,18 @@ export default function Login() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2 mt-1">
+            <div className="mt-1 flex items-center gap-2">
               <input type="checkbox" id="remember" className="rounded border-gray-300 text-[#00bfa5] focus:ring-[#00bfa5] h-4 w-4" />
               <label htmlFor="remember" className="text-sm font-medium text-gray-600 cursor-pointer">تذكرني</label>
             </div>
 
-            <Button type="submit" className="w-full h-12 text-lg font-bold bg-[#00bfa5] hover:bg-[#00a68f] text-white rounded-xl mt-2 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-[#00bfa5]/30" disabled={isSubmitting}>
+            <Button type="submit" className="mt-2 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#00bfa5] text-lg font-bold text-white shadow-lg shadow-[#00bfa5]/30 transition-colors hover:bg-[#00a68f]" disabled={isSubmitting}>
               <LogIn className="h-5 w-5" />
               {isSubmitting ? 'جاري التحميل...' : 'تسجيل الدخول'}
             </Button>
           </form>
           
-          <div className="mt-8 text-center">
+          <div className="mt-6 text-center sm:mt-8">
             <p className="text-xs text-gray-400 font-medium">
               جميع الحقوق محفوظة لدى شركة إنارة للمشروعات - 2026
             </p>
