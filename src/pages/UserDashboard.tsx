@@ -4,11 +4,14 @@ import { db, logOut } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
-import { LogOut, Warehouse as WarehouseIcon, Package, Search, ArrowRightLeft, AlertTriangle } from 'lucide-react';
+import { LogOut, Warehouse as WarehouseIcon, Package, Search, RefreshCw, ArrowRightLeft, AlertTriangle, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ar } from 'date-fns/locale';
 import { Input } from '../components/ui/Input';
 import brandLogoFull from '../assets/brand-logo-full.png';
+import { syncManagedCollections } from '../lib/dataManagement';
+
+type SyncState = 'idle' | 'syncing' | 'success' | 'error';
 
 export default function UserDashboard() {
   const { profile } = useAuth();
@@ -32,6 +35,16 @@ export default function UserDashboard() {
   const [transactionData, setTransactionData] = useState<any>({ type: 'out' });
   const [selectedItemForTx, setSelectedItemForTx] = useState<any>(null);
   const [transactionError, setTransactionError] = useState<string | null>(null);
+  const [syncState, setSyncState] = useState<{
+    tone: SyncState;
+    message: string;
+    timestamp: string | null;
+  }>({
+    tone: 'idle',
+    message: 'الحركات تحفظ مباشرة على Firebase، ويمكنك تنفيذ مزامنة يدوية في أي وقت.',
+    timestamp: null,
+  });
+  const [isManualSyncing, setIsManualSyncing] = useState(false);
 
   useEffect(() => {
     const unsubWarehouses = onSnapshot(collection(db, 'warehouses'), (snapshot) => setWarehouses(snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))));
@@ -43,6 +56,51 @@ export default function UserDashboard() {
     const unsubGuards = onSnapshot(collection(db, 'guards'), (snapshot) => setGuards(snapshot.docs.map((d) => ({ id: d.id, ...d.data() }))));
     return () => { unsubWarehouses(); unsubCategories(); unsubItems(); unsubTransactions(); unsubDrivers(); unsubCars(); unsubGuards(); };
   }, []);
+
+  const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : 'حدث خطأ غير متوقع.';
+
+  const markSyncSuccess = (message: string) => {
+    setSyncState({
+      tone: 'success',
+      message,
+      timestamp: new Date().toISOString(),
+    });
+  };
+
+  const markSyncFailure = (error: unknown, fallbackMessage: string) => {
+    console.error(error);
+    setSyncState({
+      tone: 'error',
+      message: `${fallbackMessage} ${getErrorMessage(error)}`,
+      timestamp: null,
+    });
+  };
+
+  const handleManualSync = async () => {
+    setIsManualSyncing(true);
+    setSyncState((current) => ({
+      tone: 'syncing',
+      message: 'جاري مزامنة البيانات الحالية مع Firebase...',
+      timestamp: current.timestamp,
+    }));
+
+    try {
+      const result = await syncManagedCollections(db, {
+        warehouses,
+        categories,
+        items,
+        transactions,
+        drivers,
+        cars,
+        guards,
+      });
+      markSyncSuccess(`اكتملت المزامنة اليدوية مع Firebase وتم تحديث ${result.setCount.toLocaleString('ar-EG')} سجل.`);
+    } catch (error) {
+      markSyncFailure(error, 'تعذرت المزامنة اليدوية.');
+    } finally {
+      setIsManualSyncing(false);
+    }
+  };
 
   const handleSaveTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,7 +130,20 @@ export default function UserDashboard() {
       user: profile?.name || 'Unknown'
     });
     batch.update(doc(db, 'items', selectedItemForTx.id), { quantity: newQty, lastUpdated: new Date().toISOString(), updatedBy: profile?.name || 'Unknown' });
-    await batch.commit();
+    setSyncState((current) => ({
+      tone: 'syncing',
+      message: 'جاري حفظ الحركة ومزامنتها مع Firebase...',
+      timestamp: current.timestamp,
+    }));
+
+    try {
+      await batch.commit();
+      markSyncSuccess('تم حفظ الحركة المخزنية ومزامنتها مع Firebase.');
+    } catch (error) {
+      markSyncFailure(error, 'تعذر حفظ الحركة المخزنية.');
+      return;
+    }
+
     setIsTransactionModalOpen(false);
     setTransactionData({ type: 'out' });
     setSelectedItemForTx(null);
@@ -160,6 +231,50 @@ export default function UserDashboard() {
             <div className="dashboard-panel group relative flex items-center justify-between overflow-hidden rounded-3xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg"><div className="absolute right-0 top-0 h-full w-1.5 origin-bottom bg-[#00bfa5] transition-transform duration-300 group-hover:scale-y-110"></div><div className="pr-2"><h3 className="mb-1 text-sm font-bold text-gray-500">المخازن المتاحة</h3><p className="text-3xl font-black text-[#004d40]">{warehouses.length}</p></div><div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-teal-50 text-[#00bfa5] transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3"><WarehouseIcon className="h-7 w-7" /></div></div>
             <div className="dashboard-panel group relative flex items-center justify-between overflow-hidden rounded-3xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg"><div className="absolute right-0 top-0 h-full w-1.5 origin-bottom bg-[#00bfa5] transition-transform duration-300 group-hover:scale-y-110"></div><div className="pr-2"><h3 className="mb-1 text-sm font-bold text-gray-500">إجمالي الأصناف</h3><p className="text-3xl font-black text-[#004d40]">{items.length}</p></div><div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-teal-50 text-[#00bfa5] transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3"><Package className="h-7 w-7" /></div></div>
           </div>
+
+          <div className="dashboard-panel mb-6 rounded-[28px] p-4 sm:p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${
+                      syncState.tone === 'success'
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : syncState.tone === 'error'
+                          ? 'bg-red-50 text-red-700'
+                          : syncState.tone === 'syncing'
+                            ? 'bg-blue-50 text-blue-700'
+                            : 'bg-slate-100 text-slate-700'
+                    }`}
+                  >
+                    {syncState.tone === 'success' && <CheckCircle2 className="h-4 w-4" />}
+                    {syncState.tone === 'error' && <AlertCircle className="h-4 w-4" />}
+                    {syncState.tone === 'syncing' && <RefreshCw className="h-4 w-4 animate-spin" />}
+                    {syncState.message}
+                  </span>
+                  {syncState.timestamp && (
+                    <span className="text-xs font-medium text-gray-500">
+                      آخر مزامنة: {format(new Date(syncState.timestamp), 'PP p', { locale: ar })}
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm text-gray-600">
+                  تحفظ الحركات مباشرة على Firebase، ويمكنك استخدام زر المزامنة لإعادة رفع النسخة الحالية من البيانات عند الحاجة.
+                </p>
+              </div>
+
+              <Button
+                variant="secondary"
+                onClick={handleManualSync}
+                className="self-start rounded-2xl bg-slate-100 text-slate-800 hover:bg-slate-200"
+                disabled={isManualSyncing}
+              >
+                <RefreshCw className={`ml-2 h-4 w-4 ${isManualSyncing ? 'animate-spin' : ''}`} />
+                {isManualSyncing ? 'جاري المزامنة...' : 'مزامنة Firebase'}
+              </Button>
+            </div>
+          </div>
+
           {activeTab === 'items' && (
             <div className="dashboard-shell flex flex-1 flex-col overflow-visible rounded-[28px] p-4 md:min-h-0 md:overflow-hidden md:p-6">
               <div className="mb-6 flex flex-col gap-4">

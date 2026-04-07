@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, query, orderBy, writeBatch } from 'firebase/firestore';
 import { db, logOut } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -6,10 +6,13 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
-import { LogOut, Plus, Warehouse as WarehouseIcon, Layers, Package, Trash2, Edit, Search, Download, ArrowRightLeft, AlertTriangle, Users } from 'lucide-react';
+import { LogOut, Plus, Warehouse as WarehouseIcon, Layers, Package, Trash2, Edit, Search, Download, Upload, RefreshCw, ArrowRightLeft, AlertTriangle, AlertCircle, CheckCircle2, Users } from 'lucide-react';
 import { format } from 'date-fns';
 import { ar } from 'date-fns/locale';
 import brandLogoFull from '../assets/brand-logo-full.png';
+import { createFullBackupPayload, downloadBackupJson, importBackupToFirestore, parseBackupJson, syncManagedCollections } from '../lib/dataManagement';
+
+type SyncState = 'idle' | 'syncing' | 'success' | 'error';
 
 export default function AdminDashboard() {
   const { profile } = useAuth();
@@ -53,6 +56,18 @@ export default function AdminDashboard() {
 
   // View Mode
   const [itemViewMode, setItemViewMode] = useState<'detailed' | 'grouped'>('detailed');
+  const [syncState, setSyncState] = useState<{
+    tone: SyncState;
+    message: string;
+    timestamp: string | null;
+  }>({
+    tone: 'idle',
+    message: 'البيانات جاهزة ويمكنك تصدير نسخة احتياطية أو مزامنتها يدويًا مع Firebase.',
+    timestamp: null,
+  });
+  const [isBackupProcessing, setIsBackupProcessing] = useState(false);
+  const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const unsubWarehouses = onSnapshot(collection(db, 'warehouses'), (snapshot) => {
@@ -88,16 +103,141 @@ export default function AdminDashboard() {
     };
   }, []);
 
+  const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : 'حدث خطأ غير متوقع.';
+
+  const markSyncSuccess = (message: string) => {
+    setSyncState({
+      tone: 'success',
+      message,
+      timestamp: new Date().toISOString(),
+    });
+  };
+
+  const markSyncFailure = (error: unknown, fallbackMessage: string) => {
+    console.error(error);
+    setSyncState({
+      tone: 'error',
+      message: `${fallbackMessage} ${getErrorMessage(error)}`,
+      timestamp: null,
+    });
+  };
+
+  const runSyncedMutation = async (
+    action: () => Promise<void>,
+    successMessage: string,
+    syncingMessage = 'جاري مزامنة التعديل مع Firebase...',
+  ) => {
+    setSyncState((current) => ({
+      tone: 'syncing',
+      message: syncingMessage,
+      timestamp: current.timestamp,
+    }));
+
+    try {
+      await action();
+      markSyncSuccess(successMessage);
+      return true;
+    } catch (error) {
+      markSyncFailure(error, 'تعذر حفظ التعديل على Firebase.');
+      return false;
+    }
+  };
+
+  const handleExportBackup = async () => {
+    setIsBackupProcessing(true);
+    setSyncState((current) => ({
+      tone: 'syncing',
+      message: 'جاري تجهيز ملف النسخة الاحتياطية JSON...',
+      timestamp: current.timestamp,
+    }));
+
+    try {
+      const payload = await createFullBackupPayload(db, profile?.name || 'مدير النظام');
+      downloadBackupJson(payload);
+      markSyncSuccess('تم تصدير جميع البيانات والإعدادات إلى ملف JSON محلي بنجاح.');
+    } catch (error) {
+      markSyncFailure(error, 'تعذر تصدير النسخة الاحتياطية.');
+    } finally {
+      setIsBackupProcessing(false);
+    }
+  };
+
+  const handleImportBackupFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+      const payload = parseBackupJson(await file.text());
+      const collectionsLabel = payload.includedCollections.map((entry) => entry).join('، ');
+
+      setConfirmDialog({
+        isOpen: true,
+        title: 'استيراد نسخة احتياطية',
+        message: `سيتم استبدال البيانات الحالية بالمحتوى الموجود في الملف للمجموعات التالية: ${collectionsLabel}. هل تريد المتابعة؟`,
+        onConfirm: async () => {
+          setConfirmDialog((previous) => ({ ...previous, isOpen: false }));
+          setIsBackupProcessing(true);
+          setSyncState((current) => ({
+            tone: 'syncing',
+            message: 'جاري استيراد ملف JSON ومزامنته مع Firebase...',
+            timestamp: current.timestamp,
+          }));
+
+          try {
+            const result = await importBackupToFirestore(db, payload);
+            markSyncSuccess(`تم استيراد النسخة الاحتياطية ومزامنة ${result.setCount.toLocaleString('ar-EG')} سجل مع Firebase.`);
+          } catch (error) {
+            markSyncFailure(error, 'تعذر استيراد النسخة الاحتياطية.');
+          } finally {
+            setIsBackupProcessing(false);
+          }
+        }
+      });
+    } catch (error) {
+      markSyncFailure(error, 'تعذر قراءة ملف النسخة الاحتياطية.');
+    }
+  };
+
+  const handleManualSync = async () => {
+    setIsManualSyncing(true);
+    setSyncState((current) => ({
+      tone: 'syncing',
+      message: 'جاري رفع النسخة الحالية من البيانات إلى Firebase...',
+      timestamp: current.timestamp,
+    }));
+
+    try {
+      const result = await syncManagedCollections(db, {
+        warehouses,
+        categories,
+        items,
+        transactions,
+        drivers,
+        cars,
+        guards,
+      });
+      markSyncSuccess(`اكتملت مزامنة البيانات الحالية مع Firebase. تم تحديث ${result.setCount.toLocaleString('ar-EG')} سجل.`);
+    } catch (error) {
+      markSyncFailure(error, 'تعذرت مزامنة البيانات الحالية.');
+    } finally {
+      setIsManualSyncing(false);
+    }
+  };
+
   const handleSaveWarehouse = async (e: React.FormEvent) => {
     e.preventDefault();
     const id = editingId || Date.now().toString();
-    await setDoc(doc(db, 'warehouses', id), {
-      id,
-      name: (formData.name || '').trim(),
-      location: (formData.location || '').trim(),
-      locationUrl: (formData.locationUrl || '').trim(),
-      createdAt: formData.createdAt || new Date().toISOString()
-    });
+    const saved = await runSyncedMutation(async () => {
+      await setDoc(doc(db, 'warehouses', id), {
+        id,
+        name: (formData.name || '').trim(),
+        location: (formData.location || '').trim(),
+        locationUrl: (formData.locationUrl || '').trim(),
+        createdAt: formData.createdAt || new Date().toISOString()
+      });
+    }, 'تم حفظ المخزن ومزامنته مع Firebase.');
+    if (!saved) return;
     setIsWarehouseModalOpen(false);
     setFormData({});
     setEditingId(null);
@@ -106,11 +246,14 @@ export default function AdminDashboard() {
   const handleSaveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     const id = editingId || Date.now().toString();
-    await setDoc(doc(db, 'categories', id), {
-      id,
-      name: formData.name,
-      description: formData.description || ''
-    });
+    const saved = await runSyncedMutation(async () => {
+      await setDoc(doc(db, 'categories', id), {
+        id,
+        name: formData.name,
+        description: formData.description || ''
+      });
+    }, 'تم حفظ القسم ومزامنته مع Firebase.');
+    if (!saved) return;
     setIsCategoryModalOpen(false);
     setFormData({});
     setEditingId(null);
@@ -118,69 +261,66 @@ export default function AdminDashboard() {
 
   const handleSaveDriver = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      const id = editingId || Date.now().toString();
+    const id = editingId || Date.now().toString();
+    const saved = await runSyncedMutation(async () => {
       await setDoc(doc(db, 'drivers', id), {
         id,
         name: (formData.name || '').trim()
       });
-      setIsDriverModalOpen(false);
-      setFormData({});
-      setEditingId(null);
-    } catch (error) {
-      console.error("Error saving driver:", error);
-      alert("حدث خطأ أثناء حفظ السائق");
-    }
+    }, 'تم حفظ السائق ومزامنته مع Firebase.');
+    if (!saved) return;
+    setIsDriverModalOpen(false);
+    setFormData({});
+    setEditingId(null);
   };
 
   const handleSaveCar = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      const id = editingId || Date.now().toString();
+    const id = editingId || Date.now().toString();
+    const saved = await runSyncedMutation(async () => {
       await setDoc(doc(db, 'cars', id), {
         id,
         number: (formData.number || '').trim()
       });
-      setIsCarModalOpen(false);
-      setFormData({});
-      setEditingId(null);
-    } catch (error) {
-      console.error("Error saving car:", error);
-      alert("حدث خطأ أثناء حفظ السيارة");
-    }
+    }, 'تم حفظ السيارة ومزامنتها مع Firebase.');
+    if (!saved) return;
+    setIsCarModalOpen(false);
+    setFormData({});
+    setEditingId(null);
   };
 
   const handleSaveGuard = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      const id = editingId || Date.now().toString();
+    const id = editingId || Date.now().toString();
+    const saved = await runSyncedMutation(async () => {
       await setDoc(doc(db, 'guards', id), {
         id,
         name: (formData.name || '').trim()
       });
-      setIsGuardModalOpen(false);
-      setFormData({});
-      setEditingId(null);
-    } catch (error) {
-      console.error("Error saving guard:", error);
-      alert("حدث خطأ أثناء حفظ الغفير");
-    }
+    }, 'تم حفظ الخفير ومزامنته مع Firebase.');
+    if (!saved) return;
+    setIsGuardModalOpen(false);
+    setFormData({});
+    setEditingId(null);
   };
 
   const handleSaveItem = async (e: React.FormEvent) => {
     e.preventDefault();
     const id = editingId || Date.now().toString();
-    await setDoc(doc(db, 'items', id), {
-      id,
-      warehouseId: formData.warehouseId,
-      categoryId: formData.categoryId,
-      name: formData.name,
-      quantity: Number(formData.quantity),
-      minQuantity: Number(formData.minQuantity || 0),
-      unit: formData.unit,
-      lastUpdated: new Date().toISOString(),
-      updatedBy: profile?.name || 'Admin'
-    });
+    const saved = await runSyncedMutation(async () => {
+      await setDoc(doc(db, 'items', id), {
+        id,
+        warehouseId: formData.warehouseId,
+        categoryId: formData.categoryId,
+        name: formData.name,
+        quantity: Number(formData.quantity),
+        minQuantity: Number(formData.minQuantity || 0),
+        unit: formData.unit,
+        lastUpdated: new Date().toISOString(),
+        updatedBy: profile?.name || 'Admin'
+      });
+    }, 'تم حفظ الصنف ومزامنته مع Firebase.');
+    if (!saved) return;
     setIsItemModalOpen(false);
     setFormData({});
     setEditingId(null);
@@ -193,7 +333,9 @@ export default function AdminDashboard() {
       message: 'هل أنت متأكد من أنك تريد حذف هذا العنصر؟ لا يمكن التراجع عن هذا الإجراء.',
       onConfirm: async () => {
         setConfirmDialog(prev => ({ ...prev, isOpen: false }));
-        await deleteDoc(doc(db, collectionName, id));
+        await runSyncedMutation(async () => {
+          await deleteDoc(doc(db, collectionName, id));
+        }, 'تم حذف العنصر ومزامنة التعديل مع Firebase.');
       }
     });
   };
@@ -205,9 +347,11 @@ export default function AdminDashboard() {
       message: 'هل أنت متأكد من أنك تريد حذف جميع التصنيفات؟ لا يمكن التراجع عن هذا الإجراء.',
       onConfirm: async () => {
         setConfirmDialog(prev => ({ ...prev, isOpen: false }));
-        for (const cat of categories) {
-          await deleteDoc(doc(db, 'categories', cat.id));
-        }
+        await runSyncedMutation(async () => {
+          for (const cat of categories) {
+            await deleteDoc(doc(db, 'categories', cat.id));
+          }
+        }, 'تم حذف جميع الأقسام ومزامنة التعديل مع Firebase.');
       }
     });
   };
@@ -243,14 +387,16 @@ export default function AdminDashboard() {
           { name: 'بطاريات وشواحن', description: 'بطاريات صناعية وشواحن' }
         ];
 
-        for (const cat of defaultCategories) {
-          const id = Date.now().toString() + Math.random().toString(36).substring(7);
-          await setDoc(doc(db, 'categories', id), {
-            id,
-            name: cat.name,
-            description: cat.description
-          });
-        }
+        await runSyncedMutation(async () => {
+          for (const cat of defaultCategories) {
+            const id = Date.now().toString() + Math.random().toString(36).substring(7);
+            await setDoc(doc(db, 'categories', id), {
+              id,
+              name: cat.name,
+              description: cat.description
+            });
+          }
+        }, 'تم تحميل الأقسام الافتراضية ومزامنتها مع Firebase.');
       }
     });
   };
@@ -306,7 +452,10 @@ export default function AdminDashboard() {
       updatedBy: profile?.name || 'Unknown'
     });
 
-    await batch.commit();
+    const saved = await runSyncedMutation(async () => {
+      await batch.commit();
+    }, 'تم تسجيل الحركة المخزنية ومزامنتها مع Firebase.');
+    if (!saved) return;
     setIsTransactionModalOpen(false);
     setTransactionData({ type: 'out' });
     setSelectedItemForTx(null);
@@ -477,6 +626,14 @@ export default function AdminDashboard() {
         </header>
 
         <main className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-28 pt-4 md:px-8 md:pb-8 md:pt-6">
+          <input
+            ref={importFileRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={handleImportBackupFile}
+          />
+
           {/* Stats Cards */}
           <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3 flex-shrink-0">
              <div className="dashboard-panel group relative flex items-center justify-between overflow-hidden rounded-3xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
@@ -509,6 +666,69 @@ export default function AdminDashboard() {
                  <Package className="h-7 w-7" />
                </div>
              </div>
+          </div>
+
+          <div className="dashboard-panel mb-6 rounded-[28px] p-4 sm:p-5">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${
+                      syncState.tone === 'success'
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : syncState.tone === 'error'
+                          ? 'bg-red-50 text-red-700'
+                          : syncState.tone === 'syncing'
+                            ? 'bg-blue-50 text-blue-700'
+                            : 'bg-slate-100 text-slate-700'
+                    }`}
+                  >
+                    {syncState.tone === 'success' && <CheckCircle2 className="h-4 w-4" />}
+                    {syncState.tone === 'error' && <AlertCircle className="h-4 w-4" />}
+                    {syncState.tone === 'syncing' && <RefreshCw className="h-4 w-4 animate-spin" />}
+                    {syncState.tone === 'idle' && <Download className="h-4 w-4" />}
+                    {syncState.message}
+                  </span>
+                  {syncState.timestamp && (
+                    <span className="text-xs font-medium text-gray-500">
+                      آخر مزامنة: {format(new Date(syncState.timestamp), 'PP p', { locale: ar })}
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm text-gray-600">
+                  يمكنك تصدير كل البيانات والإعدادات كنسخة JSON محلية، واستيرادها لاحقًا، أو إعادة مزامنة البيانات الحالية يدويًا مع Firebase.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={handleExportBackup}
+                  className="rounded-2xl bg-[#00bfa5] text-white hover:bg-[#00a68f]"
+                  disabled={isBackupProcessing || isManualSyncing}
+                >
+                  <Download className="ml-2 h-4 w-4" />
+                  {isBackupProcessing ? 'جاري التصدير...' : 'تصدير JSON'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => importFileRef.current?.click()}
+                  className="rounded-2xl border-teal-200 text-teal-700 hover:bg-teal-50"
+                  disabled={isBackupProcessing || isManualSyncing}
+                >
+                  <Upload className="ml-2 h-4 w-4" />
+                  استيراد JSON
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={handleManualSync}
+                  className="rounded-2xl bg-slate-100 text-slate-800 hover:bg-slate-200"
+                  disabled={isBackupProcessing || isManualSyncing}
+                >
+                  <RefreshCw className={`ml-2 h-4 w-4 ${isManualSyncing ? 'animate-spin' : ''}`} />
+                  {isManualSyncing ? 'جاري المزامنة...' : 'مزامنة Firebase'}
+                </Button>
+              </div>
+            </div>
           </div>
 
           {/* Content */}
