@@ -1,0 +1,1489 @@
+import React, { useState, useEffect } from 'react';
+import { collection, onSnapshot, doc, setDoc, deleteDoc, query, orderBy, writeBatch } from 'firebase/firestore';
+import { db, logOut } from '../firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
+import { Modal } from '../components/ui/Modal';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
+import { LogOut, Plus, Warehouse as WarehouseIcon, Layers, Package, Trash2, Edit, Search, Download, ArrowRightLeft, AlertTriangle, Users } from 'lucide-react';
+import { format } from 'date-fns';
+import { ar } from 'date-fns/locale';
+import brandLogoFull from '../assets/brand-logo-full.png';
+
+export default function AdminDashboard() {
+  const { profile } = useAuth();
+  const [activeTab, setActiveTab] = useState<'warehouses' | 'categories' | 'items' | 'transactions' | 'people'>('items');
+  
+  // Data states
+  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [items, setItems] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [drivers, setDrivers] = useState<any[]>([]);
+  const [cars, setCars] = useState<any[]>([]);
+  const [guards, setGuards] = useState<any[]>([]);
+  
+  // Modal states
+  const [isWarehouseModalOpen, setIsWarehouseModalOpen] = useState(false);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [isItemModalOpen, setIsItemModalOpen] = useState(false);
+  const [isTransactionModalOpen, setIsTransactionModalOpen] = useState(false);
+  const [isDriverModalOpen, setIsDriverModalOpen] = useState(false);
+  const [isCarModalOpen, setIsCarModalOpen] = useState(false);
+  const [isGuardModalOpen, setIsGuardModalOpen] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{ isOpen: boolean, title: string, message: string, onConfirm: () => void }>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+  
+  // Form states
+  const [formData, setFormData] = useState<any>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [transactionData, setTransactionData] = useState<any>({ type: 'out' });
+  const [selectedItemForTx, setSelectedItemForTx] = useState<any>(null);
+
+  // Search and Filter states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterWarehouse, setFilterWarehouse] = useState('all');
+  const [filterCategory, setFilterCategory] = useState('all');
+  const [filterUnit, setFilterUnit] = useState('all');
+  
+  // Transaction Filters
+  const [txSearchQuery, setTxSearchQuery] = useState('');
+  const [txTypeFilter, setTxTypeFilter] = useState('all');
+  const [txCategoryFilter, setTxCategoryFilter] = useState('all');
+
+  // View Mode
+  const [itemViewMode, setItemViewMode] = useState<'detailed' | 'grouped'>('detailed');
+
+  useEffect(() => {
+    const unsubWarehouses = onSnapshot(collection(db, 'warehouses'), (snapshot) => {
+      setWarehouses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubCategories = onSnapshot(collection(db, 'categories'), (snapshot) => {
+      setCategories(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubItems = onSnapshot(collection(db, 'items'), (snapshot) => {
+      setItems(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubTransactions = onSnapshot(query(collection(db, 'transactions'), orderBy('date', 'desc')), (snapshot) => {
+      setTransactions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubDrivers = onSnapshot(collection(db, 'drivers'), (snapshot) => {
+      setDrivers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubCars = onSnapshot(collection(db, 'cars'), (snapshot) => {
+      setCars(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubGuards = onSnapshot(collection(db, 'guards'), (snapshot) => {
+      setGuards(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => {
+      unsubWarehouses();
+      unsubCategories();
+      unsubItems();
+      unsubTransactions();
+      unsubDrivers();
+      unsubCars();
+      unsubGuards();
+    };
+  }, []);
+
+  const handleSaveWarehouse = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const id = editingId || Date.now().toString();
+    await setDoc(doc(db, 'warehouses', id), {
+      id,
+      name: (formData.name || '').trim(),
+      location: (formData.location || '').trim(),
+      locationUrl: (formData.locationUrl || '').trim(),
+      createdAt: formData.createdAt || new Date().toISOString()
+    });
+    setIsWarehouseModalOpen(false);
+    setFormData({});
+    setEditingId(null);
+  };
+
+  const handleSaveCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const id = editingId || Date.now().toString();
+    await setDoc(doc(db, 'categories', id), {
+      id,
+      name: formData.name,
+      description: formData.description || ''
+    });
+    setIsCategoryModalOpen(false);
+    setFormData({});
+    setEditingId(null);
+  };
+
+  const handleSaveDriver = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const id = editingId || Date.now().toString();
+      await setDoc(doc(db, 'drivers', id), {
+        id,
+        name: (formData.name || '').trim()
+      });
+      setIsDriverModalOpen(false);
+      setFormData({});
+      setEditingId(null);
+    } catch (error) {
+      console.error("Error saving driver:", error);
+      alert("حدث خطأ أثناء حفظ السائق");
+    }
+  };
+
+  const handleSaveCar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const id = editingId || Date.now().toString();
+      await setDoc(doc(db, 'cars', id), {
+        id,
+        number: (formData.number || '').trim()
+      });
+      setIsCarModalOpen(false);
+      setFormData({});
+      setEditingId(null);
+    } catch (error) {
+      console.error("Error saving car:", error);
+      alert("حدث خطأ أثناء حفظ السيارة");
+    }
+  };
+
+  const handleSaveGuard = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const id = editingId || Date.now().toString();
+      await setDoc(doc(db, 'guards', id), {
+        id,
+        name: (formData.name || '').trim()
+      });
+      setIsGuardModalOpen(false);
+      setFormData({});
+      setEditingId(null);
+    } catch (error) {
+      console.error("Error saving guard:", error);
+      alert("حدث خطأ أثناء حفظ الغفير");
+    }
+  };
+
+  const handleSaveItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const id = editingId || Date.now().toString();
+    await setDoc(doc(db, 'items', id), {
+      id,
+      warehouseId: formData.warehouseId,
+      categoryId: formData.categoryId,
+      name: formData.name,
+      quantity: Number(formData.quantity),
+      minQuantity: Number(formData.minQuantity || 0),
+      unit: formData.unit,
+      lastUpdated: new Date().toISOString(),
+      updatedBy: profile?.name || 'Admin'
+    });
+    setIsItemModalOpen(false);
+    setFormData({});
+    setEditingId(null);
+  };
+
+  const handleDelete = async (collectionName: string, id: string) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'تأكيد الحذف',
+      message: 'هل أنت متأكد من أنك تريد حذف هذا العنصر؟ لا يمكن التراجع عن هذا الإجراء.',
+      onConfirm: async () => {
+        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+        await deleteDoc(doc(db, collectionName, id));
+      }
+    });
+  };
+
+  const handleDeleteAllCategories = async () => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'حذف جميع التصنيفات',
+      message: 'هل أنت متأكد من أنك تريد حذف جميع التصنيفات؟ لا يمكن التراجع عن هذا الإجراء.',
+      onConfirm: async () => {
+        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+        for (const cat of categories) {
+          await deleteDoc(doc(db, 'categories', cat.id));
+        }
+      }
+    });
+  };
+
+  const handleSeedCategories = async () => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'تحميل التصنيفات',
+      message: 'هل تريد إضافة التصنيفات الشائعة لمجال المقاولات الكهربائية؟',
+      onConfirm: async () => {
+        setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+        const defaultCategories = [
+          { name: 'كابلات جهد متوسط', description: 'كابلات وموصلات الجهد المتوسط' },
+          { name: 'كابلات جهد منخفض', description: 'كابلات وموصلات الجهد المنخفض' },
+          { name: 'كابلات تحكم واتصالات', description: 'كابلات الكنترول، الداتا، والاتصالات' },
+          { name: 'لوحات كهربائية', description: 'لوحات التوزيع، مفاتيح الفصل، والقواطع' },
+          { name: 'محولات كهربائية', description: 'محولات الجهد والتيار' },
+          { name: 'أنظمة إنارة', description: 'كشافات، لمبات، وأنظمة الإنارة الداخلية والخارجية' },
+          { name: 'حوامل كابلات ومواسير', description: 'Cable Trays, Trunking, Conduits' },
+          { name: 'مخارج ومفاتيح', description: 'برايز، مفاتيح إنارة، وعلب ماجيك' },
+          { name: 'أنظمة تأريض', description: 'حراب تأريض، كابلات نحاس عاري، ومانعات صواعق' },
+          { name: 'أنظمة إنذار حريق', description: 'حساسات، لوحات إنذار، وكواشف' },
+          { name: 'أنظمة تيار خفيف', description: 'كاميرات مراقبة، أنظمة صوتيات، شبكات' },
+          { name: 'عدد وأدوات', description: 'عدد يدوية، أجهزة قياس، ومعدات تركيب' },
+          { name: 'مهمات أمن وسلامة', description: 'خوذ، قفازات، وأحذية سلامة' },
+          { name: 'اكسسوارات وقطع غيار', description: 'ترامل، رووزتات، شريط لحام، ومسامير' },
+          { name: 'مواسير وقطع اتصال', description: 'مواسير بلاستيك، حديد، ولوازمها' },
+          { name: 'مولدات كهربائية', description: 'مولدات ديزل، بنزين، وقطع غيارها' },
+          { name: 'أنظمة طاقة شمسية', description: 'ألواح شمسية، إنفرتر، وبطاريات' },
+          { name: 'أنظمة تحكم ذكي', description: 'أنظمة السمارت هوم و KNX' },
+          { name: 'كابلات ألياف ضوئية', description: 'Fiber Optic Cables وملحقاتها' },
+          { name: 'لوحات تحكم ومحركات', description: 'Motor Control Centers - MCC' },
+          { name: 'بطاريات وشواحن', description: 'بطاريات صناعية وشواحن' }
+        ];
+
+        for (const cat of defaultCategories) {
+          const id = Date.now().toString() + Math.random().toString(36).substring(7);
+          await setDoc(doc(db, 'categories', id), {
+            id,
+            name: cat.name,
+            description: cat.description
+          });
+        }
+      }
+    });
+  };
+
+  const [transactionError, setTransactionError] = useState<string | null>(null);
+
+  const handleSaveTransaction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTransactionError(null);
+    if (!selectedItemForTx) return;
+
+    const qty = Number(transactionData.quantity);
+    if (qty <= 0) {
+      setTransactionError('الكمية يجب أن تكون أكبر من صفر');
+      return;
+    }
+
+    const newQty = transactionData.type === 'in' 
+      ? selectedItemForTx.quantity + qty 
+      : selectedItemForTx.quantity - qty;
+
+    if (newQty < 0) {
+      setTransactionError('الكمية المتاحة غير كافية لهذه الحركة!');
+      return;
+    }
+
+    const batch = writeBatch(db);
+    const txId = Date.now().toString();
+    const txRef = doc(db, 'transactions', txId);
+    const itemRef = doc(db, 'items', selectedItemForTx.id);
+    const warehouseName = warehouses.find(w => w.id === selectedItemForTx.warehouseId)?.name || '';
+
+    batch.set(txRef, {
+      id: txId,
+      itemId: selectedItemForTx.id,
+      itemName: selectedItemForTx.name,
+      warehouseId: selectedItemForTx.warehouseId || '',
+      warehouseName,
+      type: transactionData.type,
+      quantity: qty,
+      projectName: transactionData.type === 'out' ? (transactionData.projectName || '') : '',
+      driverName: transactionData.driverName || '',
+      carNumber: transactionData.carNumber || '',
+      guardName: transactionData.guardName || '',
+      notes: transactionData.notes || '',
+      date: new Date().toISOString(),
+      user: profile?.name || 'Unknown'
+    });
+
+    batch.update(itemRef, {
+      quantity: newQty,
+      lastUpdated: new Date().toISOString(),
+      updatedBy: profile?.name || 'Unknown'
+    });
+
+    await batch.commit();
+    setIsTransactionModalOpen(false);
+    setTransactionData({ type: 'out' });
+    setSelectedItemForTx(null);
+  };
+
+  const filteredItems = items.filter(item => {
+    const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesWarehouse = filterWarehouse === 'all' || item.warehouseId === filterWarehouse;
+    const matchesCategory = filterCategory === 'all' || item.categoryId === filterCategory;
+    const matchesUnit = filterUnit === 'all' || item.unit === filterUnit;
+    return matchesSearch && matchesWarehouse && matchesCategory && matchesUnit;
+  }).sort((a, b) => {
+    const catA = categories.find(c => c.id === a.categoryId)?.name || '';
+    const catB = categories.find(c => c.id === b.categoryId)?.name || '';
+    if (catA !== catB) return catA.localeCompare(catB, 'ar');
+    return a.name.localeCompare(b.name, 'ar');
+  });
+
+  const groupedItems = Object.values(filteredItems.reduce((acc: any, item) => {
+    const key = `${item.categoryId}-${item.name}-${item.unit}`;
+    if (!acc[key]) {
+      acc[key] = { 
+        ...item, 
+        quantity: 0, 
+        warehouseDetails: [] 
+      };
+    }
+    acc[key].quantity += item.quantity;
+    const whName = warehouses.find(w => w.id === item.warehouseId)?.name || 'غير محدد';
+    acc[key].warehouseDetails.push(`${whName} (${item.quantity})`);
+    return acc;
+  }, {}));
+
+  const categoryNameById: Record<string, string> = {};
+  categories.forEach((category) => {
+    categoryNameById[category.id] = category.name;
+  });
+
+  const warehouseNameById: Record<string, string> = {};
+  warehouses.forEach((warehouse) => {
+    warehouseNameById[warehouse.id] = warehouse.name;
+  });
+
+  const itemCategoryIdByItemId: Record<string, string | undefined> = {};
+  items.forEach((item) => {
+    itemCategoryIdByItemId[item.id] = item.categoryId;
+  });
+
+  const itemWarehouseIdByItemId: Record<string, string | undefined> = {};
+  items.forEach((item) => {
+    itemWarehouseIdByItemId[item.id] = item.warehouseId;
+  });
+
+  const getTransactionCategoryId = (tx: any) => itemCategoryIdByItemId[tx.itemId] || 'uncategorized';
+  const getTransactionCategoryName = (tx: any) => {
+    const categoryId = getTransactionCategoryId(tx);
+    return categoryId === 'uncategorized' ? 'غير محدد' : categoryNameById[categoryId] || 'غير محدد';
+  };
+  const getTransactionWarehouseId = (tx: any) => tx.warehouseId || itemWarehouseIdByItemId[tx.itemId];
+  const getTransactionWarehouseName = (tx: any) => {
+    const warehouseId = getTransactionWarehouseId(tx);
+    if (tx.warehouseName) return tx.warehouseName;
+    return warehouseId ? warehouseNameById[warehouseId] || 'غير محدد' : 'غير محدد';
+  };
+
+  const getWarehouseLocationHref = (warehouse: any) => {
+    const locationUrl = (warehouse.locationUrl || '').trim();
+    if (locationUrl) {
+      return /^(https?:\/\/|geo:)/i.test(locationUrl)
+        ? locationUrl
+        : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(locationUrl)}`;
+    }
+    const location = (warehouse.location || '').trim();
+    return location
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location)}`
+      : '';
+  };
+
+  const filteredTransactions = transactions.filter(tx => {
+    const matchesSearch = tx.itemName.toLowerCase().includes(txSearchQuery.toLowerCase()) ||
+                          (tx.projectName && tx.projectName.toLowerCase().includes(txSearchQuery.toLowerCase()));
+    const matchesType = txTypeFilter === 'all' || tx.type === txTypeFilter;
+    const matchesCategory = txCategoryFilter === 'all' || getTransactionCategoryId(tx) === txCategoryFilter;
+    return matchesSearch && matchesType && matchesCategory;
+  });
+
+  const transactionSummary = filteredTransactions.reduce((summary, tx) => {
+    summary.total += 1;
+    if (tx.type === 'in') {
+      summary.inbound += Number(tx.quantity || 0);
+    } else {
+      summary.outbound += Number(tx.quantity || 0);
+    }
+    return summary;
+  }, { total: 0, inbound: 0, outbound: 0 });
+
+  const uniqueUnits = Array.from(new Set(items.map(item => item.unit))).filter(Boolean);
+
+  const openEditModal = (type: string, item: any) => {
+    setFormData(item);
+    setEditingId(item.id);
+    if (type === 'warehouse') setIsWarehouseModalOpen(true);
+    if (type === 'category') setIsCategoryModalOpen(true);
+    if (type === 'item') setIsItemModalOpen(true);
+  };
+
+  return (
+    <div className="app-shell flex h-[100dvh] overflow-hidden text-right font-sans" dir="rtl">
+      {/* Sidebar / Bottom Nav */}
+      <aside className="fixed bottom-0 z-50 flex w-full rounded-t-[2rem] bg-[linear-gradient(180deg,#003a34_0%,#004d40_48%,#016b5b_100%)] text-white shadow-[0_-8px_30px_rgba(0,0,0,0.12)] md:inset-y-0 md:right-0 md:w-64 md:rounded-none md:flex-col md:shadow-2xl">
+        <div className="hidden md:flex p-6 flex-col items-center justify-center border-b border-white/10">
+          <div className="mb-4 rounded-[28px] bg-white/95 p-3 shadow-xl shadow-black/10">
+            <img src={brandLogoFull} alt="شعار إنارة ستوك" className="h-auto w-40 max-w-full" />
+          </div>
+          <h2 className="text-xl font-black tracking-wider text-center">إدارة مخازن إنارة</h2>
+        </div>
+        
+        <div className="hidden md:flex mx-4 mt-6 p-4 bg-black/20 rounded-2xl items-center gap-3">
+          <div className="h-10 w-10 rounded-full bg-[#00bfa5] flex items-center justify-center font-bold text-lg shrink-0">
+            {profile?.name?.charAt(0) || 'م'}
+          </div>
+          <div className="overflow-hidden">
+            <p className="font-bold text-sm truncate">{profile?.name}</p>
+            <p className="text-xs text-[#00bfa5]">المدير العام</p>
+          </div>
+        </div>
+
+        <nav className="flex-1 flex md:flex-col px-2 py-2 md:px-4 md:py-6 gap-1 md:space-y-2 overflow-x-auto md:overflow-y-auto no-scrollbar justify-around md:justify-start">
+          <button onClick={() => setActiveTab('items')} className={`flex flex-col md:flex-row items-center gap-1 md:gap-3 px-3 py-2 md:px-4 md:py-3 rounded-xl transition-all duration-200 min-w-[70px] md:min-w-0 ${activeTab === 'items' ? 'bg-[#00bfa5] text-white shadow-md' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>
+            <Package className="h-5 w-5 md:h-5 md:w-5" />
+            <span className="font-bold text-[10px] md:text-sm">المنتجات</span>
+          </button>
+          <button onClick={() => setActiveTab('categories')} className={`flex flex-col md:flex-row items-center gap-1 md:gap-3 px-3 py-2 md:px-4 md:py-3 rounded-xl transition-all duration-200 min-w-[70px] md:min-w-0 ${activeTab === 'categories' ? 'bg-[#00bfa5] text-white shadow-md' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>
+            <Layers className="h-5 w-5 md:h-5 md:w-5" />
+            <span className="font-bold text-[10px] md:text-sm">التصنيفات</span>
+          </button>
+          <button onClick={() => setActiveTab('warehouses')} className={`flex flex-col md:flex-row items-center gap-1 md:gap-3 px-3 py-2 md:px-4 md:py-3 rounded-xl transition-all duration-200 min-w-[70px] md:min-w-0 ${activeTab === 'warehouses' ? 'bg-[#00bfa5] text-white shadow-md' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>
+            <WarehouseIcon className="h-5 w-5 md:h-5 md:w-5" />
+            <span className="font-bold text-[10px] md:text-sm">المخازن</span>
+          </button>
+          <button onClick={() => setActiveTab('transactions')} className={`flex flex-col md:flex-row items-center gap-1 md:gap-3 px-3 py-2 md:px-4 md:py-3 rounded-xl transition-all duration-200 min-w-[70px] md:min-w-0 ${activeTab === 'transactions' ? 'bg-[#00bfa5] text-white shadow-md' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>
+            <ArrowRightLeft className="h-5 w-5 md:h-5 md:w-5" />
+            <span className="font-bold text-[10px] md:text-sm">سجل الحركات</span>
+          </button>
+          <button onClick={() => setActiveTab('people')} className={`flex flex-col md:flex-row items-center gap-1 md:gap-3 px-3 py-2 md:px-4 md:py-3 rounded-xl transition-all duration-200 min-w-[70px] md:min-w-0 ${activeTab === 'people' ? 'bg-[#00bfa5] text-white shadow-md' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>
+            <Users className="h-5 w-5 md:h-5 md:w-5" />
+            <span className="font-bold text-[10px] md:text-sm">الأفراد والمركبات</span>
+          </button>
+        </nav>
+      </aside>
+
+      {/* Main Content */}
+      <div className="mb-20 flex min-h-0 flex-1 flex-col overflow-hidden md:mb-0 md:mr-64">
+        {/* Top Header */}
+        <header className="dashboard-shell sticky top-0 z-40 flex min-h-20 items-center justify-between border-b border-white/60 px-4 py-4 md:px-8">
+          <h1 className="text-2xl font-black text-[#004d40]">
+            {activeTab === 'items' && 'إدارة المنتجات'}
+            {activeTab === 'categories' && 'إدارة التصنيفات'}
+            {activeTab === 'warehouses' && 'إدارة المخازن'}
+            {activeTab === 'transactions' && 'سجل الحركات'}
+            {activeTab === 'people' && 'إدارة الأفراد والمركبات'}
+          </h1>
+          <div className="flex items-center gap-4">
+            <Button onClick={logOut} variant="ghost" className="text-red-500 hover:bg-red-50 rounded-xl">
+              <LogOut className="h-5 w-5 ml-2" /> تسجيل الخروج
+            </Button>
+          </div>
+        </header>
+
+        <main className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-28 pt-4 md:px-8 md:pb-8 md:pt-6">
+          {/* Stats Cards */}
+          <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3 flex-shrink-0">
+             <div className="dashboard-panel group relative flex items-center justify-between overflow-hidden rounded-3xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
+               <div className="absolute top-0 right-0 w-1.5 h-full bg-[#00bfa5] transform origin-bottom transition-transform duration-300 group-hover:scale-y-110"></div>
+               <div className="pr-2">
+                 <h3 className="text-sm font-bold text-gray-500 mb-1">إجمالي المخازن</h3>
+                 <p className="text-3xl font-black text-[#004d40]">{warehouses.length}</p>
+               </div>
+               <div className="h-14 w-14 rounded-2xl bg-teal-50 flex items-center justify-center text-[#00bfa5] transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3">
+                 <WarehouseIcon className="h-7 w-7" />
+               </div>
+             </div>
+             <div className="dashboard-panel group relative flex items-center justify-between overflow-hidden rounded-3xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
+               <div className="absolute top-0 right-0 w-1.5 h-full bg-[#00bfa5] transform origin-bottom transition-transform duration-300 group-hover:scale-y-110"></div>
+               <div className="pr-2">
+                 <h3 className="text-sm font-bold text-gray-500 mb-1">التصنيفات</h3>
+                 <p className="text-3xl font-black text-[#004d40]">{categories.length}</p>
+               </div>
+               <div className="h-14 w-14 rounded-2xl bg-teal-50 flex items-center justify-center text-[#00bfa5] transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3">
+                 <Layers className="h-7 w-7" />
+               </div>
+             </div>
+             <div className="dashboard-panel group relative flex items-center justify-between overflow-hidden rounded-3xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
+               <div className="absolute top-0 right-0 w-1.5 h-full bg-[#00bfa5] transform origin-bottom transition-transform duration-300 group-hover:scale-y-110"></div>
+               <div className="pr-2">
+                 <h3 className="text-sm font-bold text-gray-500 mb-1">إجمالي الأصناف</h3>
+                 <p className="text-3xl font-black text-[#004d40]">{items.length}</p>
+               </div>
+               <div className="h-14 w-14 rounded-2xl bg-teal-50 flex items-center justify-center text-[#00bfa5] transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3">
+                 <Package className="h-7 w-7" />
+               </div>
+             </div>
+          </div>
+
+          {/* Content */}
+          <div className="dashboard-shell flex flex-1 flex-col overflow-visible rounded-[28px] p-4 md:min-h-0 md:overflow-hidden md:p-6">
+          {activeTab === 'warehouses' && (
+            <div className="flex flex-1 flex-col md:min-h-0 md:overflow-hidden">
+              <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 flex-shrink-0">
+                <h2 className="text-lg font-semibold">المخازن</h2>
+                <Button onClick={() => { setFormData({}); setEditingId(null); setIsWarehouseModalOpen(true); }}>
+                  <Plus className="ml-2 h-4 w-4" /> إضافة مخزن
+                </Button>
+              </div>
+              
+              {/* Mobile View */}
+              <div className="grid grid-cols-1 gap-4 md:hidden">
+                {warehouses.map(w => (
+                  <div key={w.id} className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="font-bold text-lg text-gray-900">{w.name}</h3>
+                      <div className="flex gap-1">
+                        <Button variant="ghost" size="icon" onClick={() => openEditModal('warehouse', w)}>
+                          <Edit className="h-4 w-4 text-blue-600" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => handleDelete('warehouses', w.id)}>
+                          <Trash2 className="h-4 w-4 text-red-600" />
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-1 text-sm">
+                      <p><span className="font-medium text-gray-500">الموقع:</span> {w.location}</p>
+                      <p><span className="font-medium text-gray-500">تاريخ الإنشاء:</span> {format(new Date(w.createdAt), 'PP', { locale: ar })}</p>
+                    </div>
+                    {getWarehouseLocationHref(w) && (
+                      <div className="mt-3">
+                        <a
+                          href={getWarehouseLocationHref(w)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-medium text-teal-700 transition-colors hover:bg-teal-100"
+                        >
+                          فتح اللوكيشن
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {/* Desktop View */}
+              <div className="custom-scrollbar hidden min-h-0 flex-1 overflow-auto rounded-2xl border border-white/70 bg-white/80 shadow-sm md:block">
+                <table className="w-full text-right text-sm whitespace-nowrap relative">
+                  <thead className="bg-gray-50/90 text-gray-600 border-b border-gray-100 sticky top-0 z-10 backdrop-blur-sm">
+                    <tr>
+                      <th className="px-4 py-3">اسم المخزن</th>
+                      <th className="px-4 py-3">الموقع</th>
+                      <th className="px-4 py-3">تاريخ الإنشاء</th>
+                      <th className="px-4 py-3">إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {warehouses.map(w => (
+                      <tr key={w.id} className="hover:bg-teal-50/30 transition-colors group">
+                        <td className="px-4 py-3 font-bold text-gray-800">{w.name}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <span>{w.location}</span>
+                            {getWarehouseLocationHref(w) && (
+                              <a
+                                href={getWarehouseLocationHref(w)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="shrink-0 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700 transition-colors hover:bg-teal-100"
+                              >
+                                فتح اللوكيشن
+                              </a>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">{format(new Date(w.createdAt), 'PP', { locale: ar })}</td>
+                        <td className="px-4 py-3 flex gap-2">
+                          <Button variant="ghost" size="icon" onClick={() => openEditModal('warehouse', w)}>
+                            <Edit className="h-4 w-4 text-blue-600" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => handleDelete('warehouses', w.id)}>
+                            <Trash2 className="h-4 w-4 text-red-600" />
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'categories' && (
+            <div className="flex flex-1 flex-col md:min-h-0 md:overflow-hidden">
+              <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 flex-shrink-0">
+                <h2 className="text-lg font-semibold">التصنيفات</h2>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="destructive" onClick={handleDeleteAllCategories}>
+                    <Trash2 className="ml-2 h-4 w-4" /> حذف الكل
+                  </Button>
+                  <Button variant="outline" onClick={handleSeedCategories}>
+                    <Download className="ml-2 h-4 w-4" /> تحميل التصنيفات الشائعة
+                  </Button>
+                  <Button onClick={() => { setFormData({}); setEditingId(null); setIsCategoryModalOpen(true); }}>
+                    <Plus className="ml-2 h-4 w-4" /> إضافة تصنيف
+                  </Button>
+                </div>
+              </div>
+
+              {/* Mobile View */}
+              <div className="grid grid-cols-1 gap-4 md:hidden">
+                {categories.map(c => (
+                  <div key={c.id} className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="font-bold text-lg text-gray-900">{c.name}</h3>
+                      <div className="flex gap-1">
+                        <Button variant="ghost" size="icon" onClick={() => openEditModal('category', c)}>
+                          <Edit className="h-4 w-4 text-blue-600" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => handleDelete('categories', c.id)}>
+                          <Trash2 className="h-4 w-4 text-red-600" />
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-600">{c.description}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop View */}
+              <div className="custom-scrollbar hidden min-h-0 flex-1 overflow-auto rounded-2xl border border-white/70 bg-white/80 shadow-sm md:block">
+                <table className="w-full text-right text-sm whitespace-nowrap relative">
+                  <thead className="bg-gray-50/90 text-gray-600 border-b border-gray-100 sticky top-0 z-10 backdrop-blur-sm">
+                    <tr>
+                      <th className="px-4 py-3">اسم التصنيف</th>
+                      <th className="px-4 py-3">الوصف</th>
+                      <th className="px-4 py-3">إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {categories.map(c => (
+                      <tr key={c.id} className="hover:bg-teal-50/30 transition-colors group">
+                        <td className="px-4 py-3 font-bold text-gray-800">{c.name}</td>
+                        <td className="px-4 py-3">{c.description}</td>
+                        <td className="px-4 py-3 flex gap-2">
+                          <Button variant="ghost" size="icon" onClick={() => openEditModal('category', c)}>
+                            <Edit className="h-4 w-4 text-blue-600" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => handleDelete('categories', c.id)}>
+                            <Trash2 className="h-4 w-4 text-red-600" />
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'items' && (
+            <div className="flex flex-1 flex-col md:min-h-0 md:overflow-hidden">
+              <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 flex-shrink-0">
+                <h2 className="text-lg font-semibold">الأصناف والمخزون</h2>
+                <div className="flex items-center gap-4">
+                  <div className="flex bg-gray-100 p-1 rounded-lg">
+                    <button 
+                      onClick={() => setItemViewMode('detailed')}
+                      className={`px-3 py-1.5 text-sm rounded-md transition-colors ${itemViewMode === 'detailed' ? 'bg-white shadow text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+                    >
+                      عرض مفصل
+                    </button>
+                    <button 
+                      onClick={() => setItemViewMode('grouped')}
+                      className={`px-3 py-1.5 text-sm rounded-md transition-colors ${itemViewMode === 'grouped' ? 'bg-white shadow text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+                    >
+                      تجميع بالصنف
+                    </button>
+                  </div>
+                  <Button onClick={() => { setFormData({}); setEditingId(null); setIsItemModalOpen(true); }}>
+                    <Plus className="ml-2 h-4 w-4" /> إضافة صنف
+                  </Button>
+                </div>
+              </div>
+
+              {/* Filters */}
+              <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:flex-wrap">
+                <div className="relative flex-1 min-w-[200px]">
+                  <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                  <Input 
+                    placeholder="بحث عن صنف..." 
+                    className="pr-10"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+                <select 
+                  className="flex h-10 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 sm:w-40"
+                  value={filterCategory}
+                  onChange={(e) => setFilterCategory(e.target.value)}
+                >
+                  <option value="all">جميع التصنيفات</option>
+                  {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                <select 
+                  className="flex h-10 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 sm:w-40"
+                  value={filterWarehouse}
+                  onChange={(e) => setFilterWarehouse(e.target.value)}
+                >
+                  <option value="all">جميع المخازن</option>
+                  {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                </select>
+                <select 
+                  className="flex h-10 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 sm:w-40"
+                  value={filterUnit}
+                  onChange={(e) => setFilterUnit(e.target.value)}
+                >
+                  <option value="all">جميع الوحدات</option>
+                  {uniqueUnits.map(u => <option key={String(u)} value={String(u)}>{String(u)}</option>)}
+                </select>
+              </div>
+
+              {/* Mobile View */}
+              <div className="grid grid-cols-1 gap-4 md:hidden">
+                {itemViewMode === 'detailed' ? (
+                  filteredItems.length === 0 ? (
+                    <div className="p-8 text-center text-gray-500 border rounded-lg bg-gray-50">
+                      لا توجد أصناف مطابقة للبحث
+                    </div>
+                  ) : (
+                    filteredItems.map(item => {
+                      const cat = categories.find(c => c.id === item.categoryId);
+                      const wh = warehouses.find(w => w.id === item.warehouseId);
+                      return (
+                        <div key={item.id} className={`rounded-lg border bg-white p-4 shadow-sm ${item.quantity <= (item.minQuantity || 0) ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}>
+                          <div className="flex justify-between items-start mb-3">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-bold text-lg text-gray-900">{item.name}</h3>
+                                {item.quantity <= (item.minQuantity || 0) && (
+                                  <AlertTriangle className="h-5 w-5 text-red-500" />
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-2 mt-1">
+                                <span className="rounded-full bg-gray-100 px-2 py-1 text-xs">{cat?.name || 'غير محدد'}</span>
+                                <span className="rounded-full bg-blue-50 text-blue-700 px-2 py-1 text-xs">{wh?.name || 'غير محدد'}</span>
+                              </div>
+                            </div>
+                            <div className="flex gap-1">
+                              <Button variant="outline" size="sm" className="h-8 px-2 text-xs" onClick={() => { setSelectedItemForTx(item); setIsTransactionModalOpen(true); }}>
+                                <ArrowRightLeft className="h-3 w-3 ml-1" /> حركة
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={() => openEditModal('item', item)}>
+                                <Edit className="h-4 w-4 text-blue-600" />
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={() => handleDelete('items', item.id)}>
+                                <Trash2 className="h-4 w-4 text-red-600" />
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-sm mb-3 bg-white/50 p-2 rounded border border-gray-100">
+                            <div>
+                              <span className="text-gray-500 block text-xs">الكمية</span>
+                              <span className={`font-bold text-lg ${item.quantity <= (item.minQuantity || 0) ? 'text-red-600' : 'text-blue-600'}`}>{item.quantity}</span> <span className="text-gray-600">{item.unit}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-500 block text-xs">حد الطلب</span>
+                              <span className="font-bold text-gray-700 text-lg">{item.minQuantity || 0}</span>
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-end text-xs text-gray-500">
+                            <div>
+                              <span className="block">آخر تحديث: {format(new Date(item.lastUpdated), 'PP p', { locale: ar })}</span>
+                              <span className="block mt-0.5">بواسطة: {item.updatedBy}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )
+                ) : (
+                  groupedItems.length === 0 ? (
+                    <div className="p-8 text-center text-gray-500 border rounded-lg bg-gray-50">
+                      لا توجد أصناف مطابقة للبحث
+                    </div>
+                  ) : (
+                    groupedItems.map((item: any, idx: number) => {
+                      const cat = categories.find(c => c.id === item.categoryId);
+                      return (
+                        <div key={idx} className={`rounded-lg border bg-white p-4 shadow-sm ${item.quantity <= (item.minQuantity || 0) ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}>
+                          <div className="flex justify-between items-start mb-3">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-bold text-lg text-gray-900">{item.name}</h3>
+                                {item.quantity <= (item.minQuantity || 0) && (
+                                  <AlertTriangle className="h-5 w-5 text-red-500" />
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-2 mt-1">
+                                <span className="rounded-full bg-gray-100 px-2 py-1 text-xs">{cat?.name || 'غير محدد'}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-sm mb-3 bg-white/50 p-2 rounded border border-gray-100">
+                            <div>
+                              <span className="text-gray-500 block text-xs">إجمالي الكمية</span>
+                              <span className={`font-bold text-lg ${item.quantity <= (item.minQuantity || 0) ? 'text-red-600' : 'text-blue-600'}`}>{item.quantity}</span> <span className="text-gray-600">{item.unit}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-500 block text-xs">حد الطلب</span>
+                              <span className="font-bold text-gray-700 text-lg">{item.minQuantity || 0}</span>
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            <span className="font-medium text-gray-700 mb-1 block">التوزيع على المخازن:</span>
+                            <div className="flex flex-wrap gap-1">
+                              {item.warehouseDetails.map((w: string, i: number) => (
+                                <span key={i} className="bg-gray-100 px-2 py-1 rounded-md">{w}</span>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )
+                )}
+              </div>
+
+              {/* Desktop View */}
+              <div className="custom-scrollbar hidden min-h-0 flex-1 overflow-auto rounded-2xl border border-white/70 bg-white/80 shadow-sm md:block">
+                <table className="w-full text-right text-sm whitespace-nowrap relative">
+                  <thead className="bg-gray-50/90 text-gray-600 border-b border-gray-100 sticky top-0 z-10 backdrop-blur-sm">
+                    {itemViewMode === 'detailed' ? (
+                      <tr>
+                        <th className="px-4 py-3">الصنف</th>
+                        <th className="px-4 py-3">التصنيف</th>
+                        <th className="px-4 py-3">المخزن</th>
+                        <th className="px-4 py-3">الكمية</th>
+                        <th className="px-4 py-3">الوحدة</th>
+                        <th className="px-4 py-3">آخر تحديث</th>
+                        <th className="px-4 py-3">بواسطة</th>
+                        <th className="px-4 py-3">إجراءات</th>
+                      </tr>
+                    ) : (
+                      <tr>
+                        <th className="px-4 py-3">الصنف</th>
+                        <th className="px-4 py-3">التصنيف</th>
+                        <th className="px-4 py-3">إجمالي الكمية</th>
+                        <th className="px-4 py-3">الوحدة</th>
+                        <th className="px-4 py-3">التوزيع على المخازن</th>
+                      </tr>
+                    )}
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {itemViewMode === 'detailed' ? (
+                      filteredItems.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
+                            لا توجد أصناف مطابقة للبحث
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredItems.map(item => {
+                          const cat = categories.find(c => c.id === item.categoryId);
+                          const wh = warehouses.find(w => w.id === item.warehouseId);
+                          return (
+                            <tr key={item.id} className={`hover:bg-gray-50 ${item.quantity <= (item.minQuantity || 0) ? 'bg-red-50' : ''}`}>
+                            <td className="px-4 py-3 font-medium flex items-center gap-2">
+                              {item.quantity <= (item.minQuantity || 0) && <AlertTriangle className="h-4 w-4 text-red-500" />}
+                              {item.name}
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className="rounded-full bg-gray-100 px-2 py-1 text-xs">{cat?.name || 'غير محدد'}</span>
+                            </td>
+                            <td className="px-4 py-3">{wh?.name || 'غير محدد'}</td>
+                            <td className={`px-4 py-3 font-bold ${item.quantity <= (item.minQuantity || 0) ? 'text-red-600' : 'text-blue-600'}`}>{item.quantity}</td>
+                            <td className="px-4 py-3 text-gray-500">{item.unit}</td>
+                            <td className="px-4 py-3 text-xs text-gray-500">
+                              {format(new Date(item.lastUpdated), 'PP p', { locale: ar })}
+                            </td>
+                            <td className="px-4 py-3 text-xs">{item.updatedBy}</td>
+                            <td className="px-4 py-3 flex gap-2">
+                              <Button variant="outline" size="sm" className="h-8 px-2 text-xs" onClick={() => { setSelectedItemForTx(item); setIsTransactionModalOpen(true); }}>
+                                <ArrowRightLeft className="h-3 w-3 ml-1" /> حركة
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={() => openEditModal('item', item)}>
+                                <Edit className="h-4 w-4 text-blue-600" />
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={() => handleDelete('items', item.id)}>
+                                <Trash2 className="h-4 w-4 text-red-600" />
+                              </Button>
+                            </td>
+                          </tr>
+                        );
+                      }))
+                    ) : (
+                      groupedItems.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-8 text-center text-gray-500">
+                            لا توجد أصناف مطابقة للبحث
+                          </td>
+                        </tr>
+                      ) : (
+                        groupedItems.map((item: any, idx: number) => {
+                          const cat = categories.find(c => c.id === item.categoryId);
+                          return (
+                            <tr key={idx} className={`hover:bg-teal-50/30 transition-colors group ${item.quantity <= (item.minQuantity || 0) ? 'bg-red-50' : ''}`}>
+                              <td className="px-4 py-3 font-bold text-gray-800 flex items-center gap-2">
+                                {item.quantity <= (item.minQuantity || 0) && <AlertTriangle className="h-4 w-4 text-red-500" />}
+                                {item.name}
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className="rounded-full bg-gray-100 px-2 py-1 text-xs">{cat?.name || 'غير محدد'}</span>
+                              </td>
+                              <td className={`px-4 py-3 font-bold ${item.quantity <= (item.minQuantity || 0) ? 'text-red-600' : 'text-blue-600'}`}>{item.quantity}</td>
+                              <td className="px-4 py-3 text-gray-500">{item.unit}</td>
+                              <td className="px-4 py-3">
+                                <div className="flex flex-wrap gap-1">
+                                  {item.warehouseDetails.map((w: string, i: number) => (
+                                    <span key={i} className="bg-gray-100 px-2 py-1 rounded-md text-xs">{w}</span>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {activeTab === 'transactions' && (
+            <div className="flex flex-1 flex-col md:min-h-0">
+              <div className="sticky-toolbar -mx-4 -mt-4 mb-4 px-4 pb-4 pt-4 md:-mx-6 md:-mt-6 md:px-6 md:pb-5 md:pt-5">
+                <div className="dashboard-panel rounded-3xl p-4 md:p-5">
+                  <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <h2 className="text-lg font-black text-[#004d40]">سجل الحركات المخزنية</h2>
+                        <p className="mt-1 text-sm text-gray-600">تتبع الصرف والتوريد حسب القسم والمشروع مع بقاء شريط البحث والفلترة ثابتاً أثناء التصفح.</p>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-center text-xs font-semibold sm:flex sm:flex-wrap">
+                        <div className="rounded-2xl bg-white/75 px-3 py-2 text-gray-600">
+                          <span className="block text-[11px] text-gray-500">الحركات</span>
+                          <span className="mt-1 block text-base text-[#004d40]">{transactionSummary.total.toLocaleString('ar-EG')}</span>
+                        </div>
+                        <div className="rounded-2xl bg-emerald-50 px-3 py-2 text-emerald-700">
+                          <span className="block text-[11px] text-emerald-600">توريد</span>
+                          <span className="mt-1 block text-base">{transactionSummary.inbound.toLocaleString('ar-EG')}</span>
+                        </div>
+                        <div className="rounded-2xl bg-orange-50 px-3 py-2 text-orange-700">
+                          <span className="block text-[11px] text-orange-600">صرف</span>
+                          <span className="mt-1 block text-base">{transactionSummary.outbound.toLocaleString('ar-EG')}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <div className="relative">
+                        <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                        <Input
+                          placeholder="بحث بالصنف أو المشروع..."
+                          className="h-11 rounded-2xl border-white/70 bg-white/85 pr-10 shadow-sm"
+                          value={txSearchQuery}
+                          onChange={(e) => setTxSearchQuery(e.target.value)}
+                        />
+                      </div>
+                      <select
+                        className="flex h-11 rounded-2xl border border-white/70 bg-white/85 px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                        value={txCategoryFilter}
+                        onChange={(e) => setTxCategoryFilter(e.target.value)}
+                      >
+                        <option value="all">جميع الأقسام</option>
+                        {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                      </select>
+                      <select
+                        className="flex h-11 rounded-2xl border border-white/70 bg-white/85 px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                        value={txTypeFilter}
+                        onChange={(e) => setTxTypeFilter(e.target.value)}
+                      >
+                        <option value="all">جميع الحركات</option>
+                        <option value="in">إضافة (توريد)</option>
+                        <option value="out">صرف (سحب)</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:hidden">
+                {filteredTransactions.length === 0 ? (
+                  <div className="dashboard-panel rounded-2xl border border-dashed border-gray-200 p-8 text-center text-gray-500">
+                    لا توجد حركات مطابقة للبحث الحالي
+                  </div>
+                ) : (
+                  filteredTransactions.map((tx) => (
+                    <div key={tx.id} className="dashboard-panel rounded-2xl p-4">
+                      <div className="mb-3 flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-bold text-gray-900">{tx.itemName}</h3>
+                          <p className="mt-1 text-xs text-gray-500">{format(new Date(tx.date), 'PP p', { locale: ar })}</p>
+                        </div>
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${tx.type === 'in' ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800'}`}>
+                          {tx.type === 'in' ? 'إضافة (توريد)' : 'صرف (سحب)'}
+                        </span>
+                      </div>
+                      <div className="mb-3 flex flex-wrap gap-2">
+                        <span className="rounded-full bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700">{getTransactionCategoryName(tx)}</span>
+                        {tx.projectName && <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">{tx.projectName}</span>}
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
+                        <div className="rounded-2xl bg-white/75 p-3">
+                          <span className="block text-xs text-gray-500">الكمية</span>
+                          <span className={`mt-1 block font-bold ${tx.type === 'in' ? 'text-green-600' : 'text-orange-600'}`} dir="ltr">
+                            {tx.type === 'in' ? '+' : '-'}{tx.quantity}
+                          </span>
+                        </div>
+                        <div className="rounded-2xl bg-white/75 p-3">
+                          <span className="block text-xs text-gray-500">بواسطة</span>
+                          <span className="mt-1 block font-medium text-gray-800">{tx.user || '-'}</span>
+                        </div>
+                        <div className="rounded-2xl bg-white/75 p-3">
+                          <span className="block text-xs text-gray-500">السائق</span>
+                          <span className="mt-1 block font-medium text-gray-800">{tx.driverName || '-'}</span>
+                        </div>
+                        <div className="rounded-2xl bg-white/75 p-3">
+                          <span className="block text-xs text-gray-500">رقم السيارة</span>
+                          <span className="mt-1 block font-medium text-gray-800">{tx.carNumber || '-'}</span>
+                        </div>
+                        <div className="rounded-2xl bg-white/75 p-3">
+                          <span className="block text-xs text-gray-500">الخفير</span>
+                          <span className="mt-1 block font-medium text-gray-800">{tx.guardName || '-'}</span>
+                        </div>
+                        <div className="rounded-2xl bg-white/75 p-3">
+                          <span className="block text-xs text-gray-500">المخزن</span>
+                          <span className="mt-1 block font-medium text-gray-800">{getTransactionWarehouseName(tx)}</span>
+                        </div>
+                      </div>
+                      {tx.notes && (
+                        <div className="mt-3 border-t border-white/70 pt-3">
+                          <span className="mb-1 block text-xs text-gray-500">ملاحظات</span>
+                          <p className="text-sm text-gray-700">{tx.notes}</p>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="custom-scrollbar hidden min-h-0 flex-1 overflow-auto rounded-2xl border border-white/70 bg-white/80 shadow-sm md:block">
+                <table className="relative w-full whitespace-nowrap text-right text-sm">
+                  <thead className="sticky top-0 z-10 border-b border-gray-100 bg-gray-50/90 text-gray-600 backdrop-blur-sm">
+                    <tr>
+                      <th className="px-4 py-3">التاريخ</th>
+                      <th className="px-4 py-3">الصنف</th>
+                      <th className="px-4 py-3">القسم</th>
+                      <th className="px-4 py-3">المخزن</th>
+                      <th className="px-4 py-3">نوع الحركة</th>
+                      <th className="px-4 py-3">الكمية</th>
+                      <th className="px-4 py-3">المشروع/الموقع</th>
+                      <th className="px-4 py-3">السائق</th>
+                      <th className="px-4 py-3">رقم السيارة</th>
+                      <th className="px-4 py-3">الخفير</th>
+                      <th className="px-4 py-3">بواسطة</th>
+                      <th className="px-4 py-3">ملاحظات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {filteredTransactions.length === 0 ? (
+                      <tr>
+                        <td colSpan={12} className="px-4 py-8 text-center text-gray-500">
+                          لا توجد حركات مطابقة للبحث الحالي
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredTransactions.map((tx) => (
+                        <tr key={tx.id} className="transition-colors hover:bg-teal-50/30">
+                          <td className="px-4 py-3 text-xs text-gray-500">{format(new Date(tx.date), 'PP p', { locale: ar })}</td>
+                          <td className="px-4 py-3 font-bold text-gray-800">{tx.itemName}</td>
+                          <td className="px-4 py-3">
+                            <span className="rounded-full bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700">{getTransactionCategoryName(tx)}</span>
+                          </td>
+                          <td className="px-4 py-3 text-xs">{getTransactionWarehouseName(tx)}</td>
+                          <td className="px-4 py-3">
+                            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${tx.type === 'in' ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800'}`}>
+                              {tx.type === 'in' ? 'إضافة (توريد)' : 'صرف (سحب)'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 font-bold" dir="ltr">
+                            <span className={tx.type === 'in' ? 'text-green-600' : 'text-orange-600'}>
+                              {tx.type === 'in' ? '+' : '-'}{tx.quantity}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">{tx.projectName || '-'}</td>
+                          <td className="px-4 py-3 text-xs">{tx.driverName || '-'}</td>
+                          <td className="px-4 py-3 text-xs">{tx.carNumber || '-'}</td>
+                          <td className="px-4 py-3 text-xs">{tx.guardName || '-'}</td>
+                          <td className="px-4 py-3 text-xs">{tx.user || '-'}</td>
+                          <td className="max-w-[220px] truncate px-4 py-3 text-xs text-gray-500" title={tx.notes}>{tx.notes || '-'}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {activeTab === 'people' && (
+            <div className="flex flex-1 flex-col gap-6 md:min-h-0">
+              <div className="grid flex-1 grid-cols-1 gap-6 md:min-h-0 md:grid-cols-3">
+                {/* Drivers */}
+                <Card className="dashboard-panel flex min-h-[280px] flex-col overflow-hidden md:min-h-0">
+                  <CardHeader className="bg-gray-50/50 border-b border-gray-100 pb-4 flex flex-row items-center justify-between">
+                    <CardTitle className="text-lg text-[#004d40]">السائقين</CardTitle>
+                    <Button onClick={() => { setFormData({}); setEditingId(null); setIsDriverModalOpen(true); }} size="sm" className="bg-[#00bfa5] hover:bg-[#00a08a] text-white">
+                      <Plus className="h-4 w-4 ml-1" /> إضافة
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="flex flex-col p-0 md:min-h-0 md:flex-1 md:overflow-hidden">
+                    <div className="custom-scrollbar overflow-visible md:min-h-0 md:flex-1 md:overflow-y-auto">
+                      <table className="w-full text-right text-sm relative">
+                        <thead className="bg-gray-50/90 text-gray-600 border-b border-gray-100 sticky top-0 z-10 backdrop-blur-sm">
+                          <tr>
+                            <th className="px-4 py-3">الاسم</th>
+                            <th className="px-4 py-3">إجراءات</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {drivers.length === 0 ? (
+                            <tr><td className="px-4 py-8 text-center text-gray-500">لا يوجد سائقين</td></tr>
+                          ) : (
+                            drivers.map(driver => (
+                              <tr key={driver.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                                <td className="px-4 py-3 font-medium">{driver.name}</td>
+                                <td className="px-4 py-3 w-20">
+                                  <div className="flex gap-1 justify-end">
+                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setFormData(driver); setEditingId(driver.id); setIsDriverModalOpen(true); }}>
+                                      <Edit className="h-3 w-3 text-blue-600" />
+                                    </Button>
+                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleDelete('drivers', driver.id)}>
+                                      <Trash2 className="h-3 w-3 text-red-500" />
+                                    </Button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Cars */}
+                <Card className="dashboard-panel flex min-h-[280px] flex-col overflow-hidden md:min-h-0">
+                  <CardHeader className="bg-gray-50/50 border-b border-gray-100 pb-4 flex flex-row items-center justify-between">
+                    <CardTitle className="text-lg text-[#004d40]">السيارات</CardTitle>
+                    <Button onClick={() => { setFormData({}); setEditingId(null); setIsCarModalOpen(true); }} size="sm" className="bg-[#00bfa5] hover:bg-[#00a08a] text-white">
+                      <Plus className="h-4 w-4 ml-1" /> إضافة
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="flex flex-col p-0 md:min-h-0 md:flex-1 md:overflow-hidden">
+                    <div className="custom-scrollbar overflow-visible md:min-h-0 md:flex-1 md:overflow-y-auto">
+                      <table className="w-full text-right text-sm relative">
+                        <thead className="bg-gray-50/90 text-gray-600 border-b border-gray-100 sticky top-0 z-10 backdrop-blur-sm">
+                          <tr>
+                            <th className="px-4 py-3">الرقم</th>
+                            <th className="px-4 py-3">إجراءات</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cars.length === 0 ? (
+                            <tr><td className="px-4 py-8 text-center text-gray-500">لا يوجد سيارات</td></tr>
+                          ) : (
+                            cars.map(car => (
+                              <tr key={car.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                                <td className="px-4 py-3 font-medium" dir="ltr">{car.number}</td>
+                                <td className="px-4 py-3 w-20">
+                                  <div className="flex gap-1 justify-end">
+                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setFormData(car); setEditingId(car.id); setIsCarModalOpen(true); }}>
+                                      <Edit className="h-3 w-3 text-blue-600" />
+                                    </Button>
+                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleDelete('cars', car.id)}>
+                                      <Trash2 className="h-3 w-3 text-red-500" />
+                                    </Button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Guards */}
+                <Card className="dashboard-panel flex min-h-[280px] flex-col overflow-hidden md:min-h-0">
+                  <CardHeader className="bg-gray-50/50 border-b border-gray-100 pb-4 flex flex-row items-center justify-between">
+                    <CardTitle className="text-lg text-[#004d40]">الغفراء</CardTitle>
+                    <Button onClick={() => { setFormData({}); setEditingId(null); setIsGuardModalOpen(true); }} size="sm" className="bg-[#00bfa5] hover:bg-[#00a08a] text-white">
+                      <Plus className="h-4 w-4 ml-1" /> إضافة
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="flex flex-col p-0 md:min-h-0 md:flex-1 md:overflow-hidden">
+                    <div className="custom-scrollbar overflow-visible md:min-h-0 md:flex-1 md:overflow-y-auto">
+                      <table className="w-full text-right text-sm relative">
+                        <thead className="bg-gray-50/90 text-gray-600 border-b border-gray-100 sticky top-0 z-10 backdrop-blur-sm">
+                          <tr>
+                            <th className="px-4 py-3">الاسم</th>
+                            <th className="px-4 py-3">إجراءات</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {guards.length === 0 ? (
+                            <tr><td className="px-4 py-8 text-center text-gray-500">لا يوجد غفراء</td></tr>
+                          ) : (
+                            guards.map(guard => (
+                              <tr key={guard.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                                <td className="px-4 py-3 font-medium">{guard.name}</td>
+                                <td className="px-4 py-3 w-20">
+                                  <div className="flex gap-1 justify-end">
+                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setFormData(guard); setEditingId(guard.id); setIsGuardModalOpen(true); }}>
+                                      <Edit className="h-3 w-3 text-blue-600" />
+                                    </Button>
+                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleDelete('guards', guard.id)}>
+                                      <Trash2 className="h-3 w-3 text-red-500" />
+                                    </Button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          )}
+        </div>
+        </main>
+      </div>
+
+      {/* Modals */}
+      <Modal isOpen={isWarehouseModalOpen} onClose={() => setIsWarehouseModalOpen(false)} title={editingId ? "تعديل مخزن" : "إضافة مخزن جديد"}>
+        <form onSubmit={handleSaveWarehouse} className="space-y-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium">اسم المخزن</label>
+            <Input required value={formData.name || ''} onChange={e => setFormData({...formData, name: e.target.value})} />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium">العنوان / وصف الموقع</label>
+            <Input required value={formData.location || ''} onChange={e => setFormData({...formData, location: e.target.value})} />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium">رابط اللوكيشن على الخرائط (اختياري)</label>
+            <Input
+              dir="ltr"
+              placeholder="https://maps.app.goo.gl/... أو رابط Google Maps"
+              value={formData.locationUrl || ''}
+              onChange={e => setFormData({...formData, locationUrl: e.target.value})}
+            />
+          </div>
+          <Button type="submit" className="w-full">حفظ</Button>
+        </form>
+      </Modal>
+
+      <Modal isOpen={isCategoryModalOpen} onClose={() => setIsCategoryModalOpen(false)} title={editingId ? "تعديل تصنيف" : "إضافة تصنيف جديد"}>
+        <form onSubmit={handleSaveCategory} className="space-y-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium">اسم التصنيف</label>
+            <Input required value={formData.name || ''} onChange={e => setFormData({...formData, name: e.target.value})} />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium">الوصف</label>
+            <Input value={formData.description || ''} onChange={e => setFormData({...formData, description: e.target.value})} />
+          </div>
+          <Button type="submit" className="w-full">حفظ</Button>
+        </form>
+      </Modal>
+
+      <Modal isOpen={isItemModalOpen} onClose={() => setIsItemModalOpen(false)} title={editingId ? "تعديل صنف" : "إضافة صنف جديد"}>
+        <form onSubmit={handleSaveItem} className="space-y-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium">اسم الصنف (كابل، سلك، لوحة...)</label>
+            <Input required value={formData.name || ''} onChange={e => setFormData({...formData, name: e.target.value})} />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1 block text-sm font-medium">التصنيف</label>
+              <select 
+                required 
+                className="flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                value={formData.categoryId || ''} 
+                onChange={e => setFormData({...formData, categoryId: e.target.value})}
+              >
+                <option value="">اختر التصنيف...</option>
+                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">المخزن</label>
+              <select 
+                required 
+                className="flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                value={formData.warehouseId || ''} 
+                onChange={e => setFormData({...formData, warehouseId: e.target.value})}
+              >
+                <option value="">اختر المخزن...</option>
+                {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1 block text-sm font-medium">الكمية الحالية</label>
+              <Input type="number" min="0" step="any" required value={formData.quantity || ''} onChange={e => setFormData({...formData, quantity: e.target.value})} />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">حد الطلب (تنبيه النواقص)</label>
+              <Input type="number" min="0" step="any" value={formData.minQuantity || ''} onChange={e => setFormData({...formData, minQuantity: e.target.value})} placeholder="مثال: 10" />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium">الوحدة</label>
+            <select 
+              required 
+              className="flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+              value={formData.unit || ''} 
+              onChange={e => setFormData({...formData, unit: e.target.value})}
+            >
+                <option value="">اختر الوحدة...</option>
+                <option value="متر">متر</option>
+                <option value="لفة">لفة</option>
+                <option value="قطعة">قطعة</option>
+                <option value="علبة">علبة</option>
+                <option value="كرتونة">كرتونة</option>
+                <option value="طقم">طقم</option>
+                <option value="بكرة">بكرة</option>
+                <option value="كيلو">كيلو</option>
+                <option value="طن">طن</option>
+                <option value="لتر">لتر</option>
+              </select>
+            </div>
+          <Button type="submit" className="w-full">حفظ</Button>
+        </form>
+      </Modal>
+
+      <Modal isOpen={isTransactionModalOpen} onClose={() => { setIsTransactionModalOpen(false); setTransactionError(null); }} title={`حركة مخزنية: ${selectedItemForTx?.name}`}>
+        <form onSubmit={handleSaveTransaction} className="space-y-4">
+          {transactionError && (
+            <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+              {transactionError}
+            </div>
+          )}
+          <div className="flex gap-6 mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="txType" value="out" className="w-4 h-4 text-blue-600" checked={transactionData.type === 'out'} onChange={() => setTransactionData({...transactionData, type: 'out'})} />
+              <span className="font-medium text-orange-700">صرف (سحب)</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="txType" value="in" className="w-4 h-4 text-blue-600" checked={transactionData.type === 'in'} onChange={() => setTransactionData({...transactionData, type: 'in'})} />
+              <span className="font-medium text-green-700">إضافة (توريد)</span>
+            </label>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1 block text-sm font-medium">الكمية</label>
+              <Input type="number" min="0.01" step="any" required value={transactionData.quantity || ''} onChange={e => setTransactionData({...transactionData, quantity: e.target.value})} />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">الكمية الحالية</label>
+              <Input disabled value={selectedItemForTx?.quantity || 0} className="bg-gray-100" />
+            </div>
+          </div>
+
+          {transactionData.type === 'out' && (
+            <div>
+              <label className="mb-1 block text-sm font-medium text-orange-700">اسم المشروع / الموقع المنصرف إليه</label>
+              <Input required placeholder="مثال: مشروع العاصمة الإدارية" value={transactionData.projectName || ''} onChange={e => setTransactionData({...transactionData, projectName: e.target.value})} />
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="mb-1 block text-sm font-medium">السائق (اختياري)</label>
+              <select 
+                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                value={transactionData.driverName || ''} 
+                onChange={e => setTransactionData({...transactionData, driverName: e.target.value})}
+              >
+                <option value="">اختر السائق...</option>
+                {drivers.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">السيارة (اختياري)</label>
+              <select 
+                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                value={transactionData.carNumber || ''} 
+                onChange={e => setTransactionData({...transactionData, carNumber: e.target.value})}
+              >
+                <option value="">اختر السيارة...</option>
+                {cars.map(c => <option key={c.id} value={c.number}>{c.number}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">الغفير (اختياري)</label>
+              <select 
+                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                value={transactionData.guardName || ''} 
+                onChange={e => setTransactionData({...transactionData, guardName: e.target.value})}
+              >
+                <option value="">اختر الغفير...</option>
+                {guards.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+              </select>
+            </div>
+          </div>
+          
+          <div>
+            <label className="mb-1 block text-sm font-medium">ملاحظات (اختياري)</label>
+            <Input placeholder="أي تفاصيل إضافية..." value={transactionData.notes || ''} onChange={e => setTransactionData({...transactionData, notes: e.target.value})} />
+          </div>
+          
+          <Button type="submit" className="w-full">تأكيد الحركة</Button>
+        </form>
+      </Modal>
+
+      <Modal isOpen={confirmDialog.isOpen} onClose={() => setConfirmDialog({ ...confirmDialog, isOpen: false })} title={confirmDialog.title}>
+        <div className="space-y-4">
+          <p className="text-gray-700">{confirmDialog.message}</p>
+          <div className="flex gap-2 justify-end mt-4">
+            <Button variant="outline" onClick={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}>إلغاء</Button>
+            <Button variant="default" onClick={confirmDialog.onConfirm}>تأكيد</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* People Modals */}
+      <Modal isOpen={isDriverModalOpen} onClose={() => setIsDriverModalOpen(false)} title={editingId ? "تعديل سائق" : "إضافة سائق جديد"}>
+        <form onSubmit={handleSaveDriver} className="space-y-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium">اسم السائق</label>
+            <Input required value={formData.name || ''} onChange={e => setFormData({...formData, name: e.target.value})} />
+          </div>
+          <Button type="submit" className="w-full">حفظ</Button>
+        </form>
+      </Modal>
+
+      <Modal isOpen={isCarModalOpen} onClose={() => setIsCarModalOpen(false)} title={editingId ? "تعديل سيارة" : "إضافة سيارة جديدة"}>
+        <form onSubmit={handleSaveCar} className="space-y-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium">رقم السيارة</label>
+            <Input required value={formData.number || ''} onChange={e => setFormData({...formData, number: e.target.value})} dir="ltr" className="text-right" />
+          </div>
+          <Button type="submit" className="w-full">حفظ</Button>
+        </form>
+      </Modal>
+
+      <Modal isOpen={isGuardModalOpen} onClose={() => setIsGuardModalOpen(false)} title={editingId ? "تعديل غفير" : "إضافة غفير جديد"}>
+        <form onSubmit={handleSaveGuard} className="space-y-4">
+          <div>
+            <label className="mb-1 block text-sm font-medium">اسم الغفير</label>
+            <Input required value={formData.name || ''} onChange={e => setFormData({...formData, name: e.target.value})} />
+          </div>
+          <Button type="submit" className="w-full">حفظ</Button>
+        </form>
+      </Modal>
+
+    </div>
+  );
+}

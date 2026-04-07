@@ -1,0 +1,246 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required)
+    //   - name: string (required)
+    //   - role: string (required, 'admin' or 'user')
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: warehouses
+    // Document ID: {warehouseId}
+    // Fields:
+    //   - id: string (required)
+    //   - name: string (required)
+    //   - location: string (required)
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: categories
+    // Document ID: {categoryId}
+    // Fields:
+    //   - id: string (required)
+    //   - name: string (required)
+    //   - description: string (optional)
+    //
+    // Collection: items
+    // Document ID: {itemId}
+    // Fields:
+    //   - id: string (required)
+    //   - warehouseId: string (required)
+    //   - categoryId: string (required)
+    //   - name: string (required)
+    //   - quantity: number (required)
+    //   - minQuantity: number (optional)
+    //   - unit: string (required)
+    //   - lastUpdated: timestamp (required)
+    //   - updatedBy: string (required)
+    //
+    // Collection: drivers
+    // Document ID: {driverId}
+    // Fields:
+    //   - id: string (required)
+    //   - name: string (required)
+    //
+    // Collection: cars
+    // Document ID: {carId}
+    // Fields:
+    //   - id: string (required)
+    //   - number: string (required)
+    //
+    // Collection: guards
+    // Document ID: {guardId}
+    // Fields:
+    //   - id: string (required)
+    //   - name: string (required)
+    //
+    // Collection: transactions
+    // Document ID: {transactionId}
+    // Fields:
+    //   - id: string (required)
+    //   - itemId: string (required)
+    //   - itemName: string (required)
+    //   - type: string (required, 'in' or 'out')
+    //   - quantity: number (required)
+    //   - projectName: string (optional)
+    //   - driverName: string (optional)
+    //   - carNumber: string (optional)
+    //   - guardName: string (optional)
+    //   - notes: string (optional)
+    //   - date: timestamp (required)
+    //   - user: string (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && (
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+        request.auth.token.email == "managallment@gmail.com" ||
+        request.auth.token.email == "naserf355@gmail.com" ||
+        request.auth.token.email == "alkhoryaa@gmail.com"
+      );
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasOnlyAllowedFields(allowedFields) {
+      return request.resource.data.keys().hasOnly(allowedFields);
+    }
+
+    function hasRequiredFields(requiredFields) {
+      return request.resource.data.keys().hasAll(requiredFields);
+    }
+
+    function isValidUser() {
+      return hasOnlyAllowedFields(['uid', 'email', 'name', 'role', 'createdAt']) &&
+             hasRequiredFields(['uid', 'email', 'name', 'role', 'createdAt']) &&
+             request.resource.data.uid is string &&
+             request.resource.data.email is string &&
+             request.resource.data.name is string && request.resource.data.name.size() < 100 &&
+             request.resource.data.role in ['admin', 'user'] &&
+             request.resource.data.createdAt is string;
+    }
+
+    function isValidWarehouse() {
+      return hasOnlyAllowedFields(['id', 'name', 'location', 'createdAt']) &&
+             hasRequiredFields(['id', 'name', 'location', 'createdAt']) &&
+             request.resource.data.id is string &&
+             request.resource.data.name is string && request.resource.data.name.size() < 100 &&
+             request.resource.data.location is string && request.resource.data.location.size() < 200 &&
+             request.resource.data.createdAt is string;
+    }
+
+    function isValidCategory() {
+      return hasOnlyAllowedFields(['id', 'name', 'description']) &&
+             hasRequiredFields(['id', 'name']) &&
+             request.resource.data.id is string &&
+             request.resource.data.name is string && request.resource.data.name.size() < 100 &&
+             (!('description' in request.resource.data) || (request.resource.data.description is string && request.resource.data.description.size() < 500));
+    }
+
+    function isValidItem() {
+      return hasOnlyAllowedFields(['id', 'warehouseId', 'categoryId', 'name', 'quantity', 'minQuantity', 'unit', 'lastUpdated', 'updatedBy']) &&
+             hasRequiredFields(['id', 'warehouseId', 'categoryId', 'name', 'quantity', 'unit', 'lastUpdated', 'updatedBy']) &&
+             request.resource.data.id is string &&
+             request.resource.data.warehouseId is string &&
+             request.resource.data.categoryId is string &&
+             request.resource.data.name is string && request.resource.data.name.size() < 200 &&
+             request.resource.data.quantity is number && request.resource.data.quantity >= 0 &&
+             (!('minQuantity' in request.resource.data) || (request.resource.data.minQuantity is number && request.resource.data.minQuantity >= 0)) &&
+             request.resource.data.unit is string && request.resource.data.unit.size() < 50 &&
+             request.resource.data.lastUpdated is string &&
+             request.resource.data.updatedBy is string;
+    }
+
+    function isValidTransaction() {
+      return hasOnlyAllowedFields(['id', 'itemId', 'itemName', 'type', 'quantity', 'projectName', 'driverName', 'carNumber', 'guardName', 'notes', 'date', 'user']) &&
+             hasRequiredFields(['id', 'itemId', 'itemName', 'type', 'quantity', 'date', 'user']) &&
+             request.resource.data.id is string &&
+             request.resource.data.itemId is string &&
+             request.resource.data.itemName is string &&
+             request.resource.data.type in ['in', 'out'] &&
+             request.resource.data.quantity is number && request.resource.data.quantity > 0 &&
+             (!('projectName' in request.resource.data) || request.resource.data.projectName is string) &&
+             (!('driverName' in request.resource.data) || request.resource.data.driverName is string) &&
+             (!('carNumber' in request.resource.data) || request.resource.data.carNumber is string) &&
+             (!('guardName' in request.resource.data) || request.resource.data.guardName is string) &&
+             (!('notes' in request.resource.data) || request.resource.data.notes is string) &&
+             request.resource.data.date is string &&
+             request.resource.data.user is string;
+    }
+
+    function isValidDriver() {
+      return hasOnlyAllowedFields(['id', 'name']) &&
+             hasRequiredFields(['id', 'name']) &&
+             request.resource.data.id is string &&
+             request.resource.data.name is string && request.resource.data.name.size() < 100;
+    }
+
+    function isValidCar() {
+      return hasOnlyAllowedFields(['id', 'number']) &&
+             hasRequiredFields(['id', 'number']) &&
+             request.resource.data.id is string &&
+             request.resource.data.number is string && request.resource.data.number.size() < 50;
+    }
+
+    function isValidGuard() {
+      return hasOnlyAllowedFields(['id', 'name']) &&
+             hasRequiredFields(['id', 'name']) &&
+             request.resource.data.id is string &&
+             request.resource.data.name is string && request.resource.data.name.size() < 100;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      
+      // Allow user to create their own profile but default to 'user' role unless admin
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser() && 
+                    (request.resource.data.role == 'user' || isAdmin());
+                    
+      // Allow admin to update any user, or user to update their own name (but not role)
+      allow update: if isAuthenticated() && isValidUser() && (
+        isAdmin() || 
+        (isOwner(userId) && request.resource.data.role == resource.data.role && request.resource.data.uid == resource.data.uid)
+      );
+    }
+
+    match /warehouses/{warehouseId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin() && (request.method == 'delete' || isValidWarehouse());
+    }
+
+    match /categories/{categoryId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin() && (request.method == 'delete' || isValidCategory());
+    }
+
+    match /items/{itemId} {
+      allow read: if isAuthenticated();
+      allow create, delete: if isAdmin() && (request.method == 'delete' || isValidItem());
+      allow update: if isAuthenticated() && isValidItem();
+    }
+
+    match /drivers/{driverId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin() && (request.method == 'delete' || isValidDriver());
+    }
+
+    match /cars/{carId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin() && (request.method == 'delete' || isValidCar());
+    }
+
+    match /guards/{guardId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin() && (request.method == 'delete' || isValidGuard());
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidTransaction();
+      allow update, delete: if isAdmin();
+    }
+  }
+}
