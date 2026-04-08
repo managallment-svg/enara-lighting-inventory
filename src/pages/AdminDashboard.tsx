@@ -35,6 +35,7 @@ export default function AdminDashboard() {
   const [isDriverModalOpen, setIsDriverModalOpen] = useState(false);
   const [isCarModalOpen, setIsCarModalOpen] = useState(false);
   const [isGuardModalOpen, setIsGuardModalOpen] = useState(false);
+  const [isDataToolsModalOpen, setIsDataToolsModalOpen] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ isOpen: boolean, title: string, message: string, onConfirm: () => void }>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
   
   // Form states
@@ -331,6 +332,11 @@ export default function AdminDashboard() {
   };
 
   const isManagementBusy = isBackupProcessing || isManualSyncing || isResettingServer;
+  const statsCards = [
+    { label: 'إجمالي المخازن', value: warehouses.length, icon: WarehouseIcon },
+    { label: 'التصنيفات', value: categories.length, icon: Layers },
+    { label: 'إجمالي الأصناف', value: items.length, icon: Package },
+  ];
 
   const handleSaveWarehouse = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -741,110 +747,90 @@ export default function AdminDashboard() {
             onChange={handleImportBackupFile}
           />
 
-          {/* Stats Cards */}
-          <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3 flex-shrink-0">
-             <div className="dashboard-panel group relative flex items-center justify-between overflow-hidden rounded-3xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
-               <div className="absolute top-0 right-0 w-1.5 h-full bg-[#00bfa5] transform origin-bottom transition-transform duration-300 group-hover:scale-y-110"></div>
-               <div className="pr-2">
-                 <h3 className="text-sm font-bold text-gray-500 mb-1">إجمالي المخازن</h3>
-                 <p className="text-3xl font-black text-[#004d40]">{warehouses.length}</p>
-               </div>
-               <div className="h-14 w-14 rounded-2xl bg-teal-50 flex items-center justify-center text-[#00bfa5] transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3">
-                 <WarehouseIcon className="h-7 w-7" />
-               </div>
-             </div>
-             <div className="dashboard-panel group relative flex items-center justify-between overflow-hidden rounded-3xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
-               <div className="absolute top-0 right-0 w-1.5 h-full bg-[#00bfa5] transform origin-bottom transition-transform duration-300 group-hover:scale-y-110"></div>
-               <div className="pr-2">
-                 <h3 className="text-sm font-bold text-gray-500 mb-1">التصنيفات</h3>
-                 <p className="text-3xl font-black text-[#004d40]">{categories.length}</p>
-               </div>
-               <div className="h-14 w-14 rounded-2xl bg-teal-50 flex items-center justify-center text-[#00bfa5] transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3">
-                 <Layers className="h-7 w-7" />
-               </div>
-             </div>
-             <div className="dashboard-panel group relative flex items-center justify-between overflow-hidden rounded-3xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
-               <div className="absolute top-0 right-0 w-1.5 h-full bg-[#00bfa5] transform origin-bottom transition-transform duration-300 group-hover:scale-y-110"></div>
-               <div className="pr-2">
-                 <h3 className="text-sm font-bold text-gray-500 mb-1">إجمالي الأصناف</h3>
-                 <p className="text-3xl font-black text-[#004d40]">{items.length}</p>
-               </div>
-               <div className="h-14 w-14 rounded-2xl bg-teal-50 flex items-center justify-center text-[#00bfa5] transition-transform duration-300 group-hover:scale-110 group-hover:rotate-3">
-                 <Package className="h-7 w-7" />
-               </div>
-             </div>
+          <div className="mb-6 grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
+              {statsCards.map((stat) => (
+                <div
+                  key={stat.label}
+                  className="dashboard-panel group relative flex min-h-[94px] flex-col justify-between overflow-hidden rounded-[22px] px-3 py-3 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg sm:min-h-[96px] sm:flex-row sm:items-center sm:rounded-[24px] sm:px-5"
+                >
+                  <div className="absolute top-0 right-0 w-1.5 h-full bg-[#00bfa5]"></div>
+                  <div className="min-w-0 pr-1 sm:pr-2">
+                    <h3 className="text-[11px] font-bold leading-4 text-gray-500 sm:text-sm">{stat.label}</h3>
+                    <p className="mt-1 text-xl font-black text-[#004d40] sm:text-[2rem]">{stat.value}</p>
+                  </div>
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-teal-50 text-[#00bfa5] transition-transform duration-300 group-hover:scale-105 sm:h-12 sm:w-12">
+                    <stat.icon className="h-4 w-4 sm:h-6 sm:w-6" />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="dashboard-panel flex min-h-[88px] flex-col justify-between gap-3 rounded-[24px] px-4 py-3 sm:min-h-[96px] sm:px-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-black text-[#004d40]">أدوات النسخ والمزامنة</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    فتح التصدير والاستيراد والمزامنة من نافذة مستقلة.
+                  </p>
+                </div>
+                <div
+                  className={`mt-0.5 shrink-0 rounded-full p-2 ${
+                    syncState.tone === 'success'
+                      ? 'bg-emerald-50 text-emerald-600'
+                      : syncState.tone === 'error'
+                        ? 'bg-red-50 text-red-600'
+                        : syncState.tone === 'syncing'
+                          ? 'bg-blue-50 text-blue-600'
+                          : 'bg-slate-100 text-slate-600'
+                  }`}
+                >
+                  {syncState.tone === 'success' && <CheckCircle2 className="h-4 w-4" />}
+                  {syncState.tone === 'error' && <AlertCircle className="h-4 w-4" />}
+                  {syncState.tone === 'syncing' && <RefreshCw className="h-4 w-4 animate-spin" />}
+                  {syncState.tone === 'idle' && <Download className="h-4 w-4" />}
+                </div>
+              </div>
+              <Button
+                onClick={() => setIsDataToolsModalOpen(true)}
+                className="h-11 rounded-2xl bg-[#00bfa5] text-white hover:bg-[#00a68f]"
+              >
+                <Download className="ml-2 h-4 w-4" />
+                فتح أدوات النسخ والمزامنة
+              </Button>
+            </div>
           </div>
 
-          <div className="dashboard-panel mb-6 rounded-[28px] p-4 sm:p-5">
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span
-                    className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${
-                      syncState.tone === 'success'
-                        ? 'bg-emerald-50 text-emerald-700'
-                        : syncState.tone === 'error'
-                          ? 'bg-red-50 text-red-700'
-                          : syncState.tone === 'syncing'
-                            ? 'bg-blue-50 text-blue-700'
-                            : 'bg-slate-100 text-slate-700'
-                    }`}
-                  >
-                    {syncState.tone === 'success' && <CheckCircle2 className="h-4 w-4" />}
-                    {syncState.tone === 'error' && <AlertCircle className="h-4 w-4" />}
-                    {syncState.tone === 'syncing' && <RefreshCw className="h-4 w-4 animate-spin" />}
-                    {syncState.tone === 'idle' && <Download className="h-4 w-4" />}
-                    {syncState.message}
-                  </span>
-                  {syncState.timestamp && (
-                    <span className="text-xs font-medium text-gray-500">
-                      آخر مزامنة: {format(new Date(syncState.timestamp), 'PP p', { locale: ar })}
-                    </span>
-                  )}
-                </div>
-                <p className="text-sm text-gray-600">
-                  يمكنك تصدير كل البيانات والإعدادات كنسخة JSON محلية، واستيرادها لاحقًا، أو إعادة مزامنة البيانات الحالية يدويًا مع Firebase.
-                </p>
+          <div className="dashboard-panel mb-6 flex flex-col gap-3 rounded-[24px] px-4 py-3 sm:px-5">
+            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <span
+                  className={`inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${
+                    syncState.tone === 'success'
+                      ? 'bg-emerald-50 text-emerald-700'
+                      : syncState.tone === 'error'
+                        ? 'bg-red-50 text-red-700'
+                        : syncState.tone === 'syncing'
+                          ? 'bg-blue-50 text-blue-700'
+                          : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  {syncState.tone === 'success' && <CheckCircle2 className="h-4 w-4 shrink-0" />}
+                  {syncState.tone === 'error' && <AlertCircle className="h-4 w-4 shrink-0" />}
+                  {syncState.tone === 'syncing' && <RefreshCw className="h-4 w-4 shrink-0 animate-spin" />}
+                  {syncState.tone === 'idle' && <Download className="h-4 w-4 shrink-0" />}
+                  <span className="truncate">{syncState.message}</span>
+                </span>
               </div>
-
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  onClick={handleExportBackup}
-                  className="rounded-2xl bg-[#00bfa5] text-white hover:bg-[#00a68f]"
-                  disabled={isManagementBusy}
-                >
-                  <Download className="ml-2 h-4 w-4" />
-                  {isBackupProcessing ? 'جاري التصدير...' : 'تصدير JSON'}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => importFileRef.current?.click()}
-                  className="rounded-2xl border-teal-200 text-teal-700 hover:bg-teal-50"
-                  disabled={isManagementBusy}
-                >
-                  <Upload className="ml-2 h-4 w-4" />
-                  استيراد JSON
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={handleManualSync}
-                  className="rounded-2xl bg-slate-100 text-slate-800 hover:bg-slate-200"
-                  disabled={isManagementBusy}
-                >
-                  <RefreshCw className={`ml-2 h-4 w-4 ${isManualSyncing ? 'animate-spin' : ''}`} />
-                  {isManualSyncing ? 'جاري المزامنة...' : 'مزامنة Firebase'}
-                </Button>
-                <Button
-                  variant="destructive"
-                  onClick={handleResetServerData}
-                  className="rounded-2xl"
-                  disabled={isManagementBusy}
-                >
-                  <Trash2 className={`ml-2 h-4 w-4 ${isResettingServer ? 'animate-pulse' : ''}`} />
-                  {isResettingServer ? 'جاري التصفير...' : 'حذف جميع البيانات'}
-                </Button>
-              </div>
+              {syncState.timestamp && (
+                <span className="text-xs font-medium text-gray-500">
+                  آخر مزامنة: {format(new Date(syncState.timestamp), 'PP p', { locale: ar })}
+                </span>
+              )}
             </div>
+            <p className="text-xs leading-6 text-gray-600 sm:text-sm">
+              تم نقل التصدير والاستيراد والمزامنة إلى نافذة منبثقة لتقليل المساحة المحجوزة أعلى الصفحة وتحسين العرض على الهاتف.
+            </p>
           </div>
 
           {/* Content */}
@@ -1616,6 +1602,85 @@ export default function AdminDashboard() {
       </div>
 
       {/* Modals */}
+      <Modal
+        isOpen={isDataToolsModalOpen}
+        onClose={() => setIsDataToolsModalOpen(false)}
+        title="أدوات النسخ الاحتياطي والمزامنة"
+        className="max-w-3xl p-5 sm:p-6"
+      >
+        <div className="space-y-5">
+          <div className="rounded-[24px] border border-teal-100 bg-teal-50/70 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="space-y-2">
+                <span
+                  className={`inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${
+                    syncState.tone === 'success'
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : syncState.tone === 'error'
+                        ? 'bg-red-100 text-red-700'
+                        : syncState.tone === 'syncing'
+                          ? 'bg-blue-100 text-blue-700'
+                          : 'bg-white text-slate-700'
+                  }`}
+                >
+                  {syncState.tone === 'success' && <CheckCircle2 className="h-4 w-4 shrink-0" />}
+                  {syncState.tone === 'error' && <AlertCircle className="h-4 w-4 shrink-0" />}
+                  {syncState.tone === 'syncing' && <RefreshCw className="h-4 w-4 shrink-0 animate-spin" />}
+                  {syncState.tone === 'idle' && <Download className="h-4 w-4 shrink-0" />}
+                  <span className="break-words">{syncState.message}</span>
+                </span>
+                <p className="text-sm leading-7 text-gray-600">
+                  يمكنك تصدير كل البيانات والإعدادات كنسخة JSON محلية، واستيرادها لاحقًا، أو إعادة مزامنة البيانات الحالية يدويًا مع Firebase.
+                </p>
+              </div>
+              {syncState.timestamp && (
+                <span className="text-xs font-medium text-gray-500">
+                  آخر مزامنة: {format(new Date(syncState.timestamp), 'PP p', { locale: ar })}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Button
+              onClick={handleExportBackup}
+              className="h-12 rounded-2xl bg-[#00bfa5] text-white hover:bg-[#00a68f]"
+              disabled={isManagementBusy}
+            >
+              <Download className="ml-2 h-4 w-4" />
+              {isBackupProcessing ? 'جاري التصدير...' : 'تصدير JSON'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => importFileRef.current?.click()}
+              className="h-12 rounded-2xl border-teal-200 text-teal-700 hover:bg-teal-50"
+              disabled={isManagementBusy}
+            >
+              <Upload className="ml-2 h-4 w-4" />
+              استيراد JSON
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={handleManualSync}
+              className="h-12 rounded-2xl bg-slate-100 text-slate-800 hover:bg-slate-200"
+              disabled={isManagementBusy}
+            >
+              <RefreshCw className={`ml-2 h-4 w-4 ${isManualSyncing ? 'animate-spin' : ''}`} />
+              {isManualSyncing ? 'جاري المزامنة...' : 'مزامنة Firebase'}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleResetServerData}
+              className="h-12 rounded-2xl"
+              disabled={isManagementBusy}
+            >
+              <Trash2 className={`ml-2 h-4 w-4 ${isResettingServer ? 'animate-pulse' : ''}`} />
+              {isResettingServer ? 'جاري التصفير...' : 'حذف جميع البيانات'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       <Modal isOpen={isWarehouseModalOpen} onClose={() => setIsWarehouseModalOpen(false)} title={editingId ? "تعديل مخزن" : "إضافة مخزن جديد"}>
         <form onSubmit={handleSaveWarehouse} className="space-y-4">
           <div>
