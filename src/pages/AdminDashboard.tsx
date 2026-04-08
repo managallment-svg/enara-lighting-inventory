@@ -6,13 +6,19 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Modal } from '../components/ui/Modal';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
-import { LogOut, Plus, Warehouse as WarehouseIcon, Layers, Package, Trash2, Edit, Search, Download, Upload, RefreshCw, ArrowRightLeft, AlertTriangle, AlertCircle, CheckCircle2, Users } from 'lucide-react';
+import { LogOut, Plus, Warehouse as WarehouseIcon, Layers, Package, Trash2, Edit, Search, Download, Upload, RefreshCw, ArrowRightLeft, AlertTriangle, AlertCircle, CheckCircle2, Users, Printer, FileText, FileSpreadsheet } from 'lucide-react';
 import { format } from 'date-fns';
 import { ar } from 'date-fns/locale';
 import brandLogoFull from '../assets/brand-logo-full.png';
 import { createFullBackupPayload, downloadBackupJson, importBackupToFirestore, parseBackupJson, resetServerData, syncManagedCollections } from '../lib/dataManagement';
+import { exportSheetsToExcel, exportSheetsToPdf, printSheets, type ExportSheet } from '../lib/reportExports';
 
 type SyncState = 'idle' | 'syncing' | 'success' | 'error';
+
+const TABLE_PANEL_HEIGHT_STORAGE_KEY = 'enara-admin-table-panel-height';
+const MIN_DESKTOP_TABLE_HEIGHT = 420;
+const MAX_DESKTOP_TABLE_OFFSET = 180;
+const DEFAULT_DESKTOP_TABLE_RATIO = 0.74;
 
 export default function AdminDashboard() {
   const { profile } = useAuth();
@@ -69,7 +75,19 @@ export default function AdminDashboard() {
   const [isBackupProcessing, setIsBackupProcessing] = useState(false);
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const [isResettingServer, setIsResettingServer] = useState(false);
+  const [reportAction, setReportAction] = useState<'idle' | 'print' | 'pdf' | 'excel'>('idle');
+  const [desktopContentHeight, setDesktopContentHeight] = useState<number | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
+  const desktopResizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
+
+  const clampDesktopTableHeight = (value: number) => {
+    if (typeof window === 'undefined') {
+      return Math.max(MIN_DESKTOP_TABLE_HEIGHT, value);
+    }
+
+    const maxHeight = Math.max(MIN_DESKTOP_TABLE_HEIGHT, window.innerHeight - MAX_DESKTOP_TABLE_OFFSET);
+    return Math.max(MIN_DESKTOP_TABLE_HEIGHT, Math.min(Math.round(value), maxHeight));
+  };
 
   useEffect(() => {
     const unsubWarehouses = onSnapshot(collection(db, 'warehouses'), (snapshot) => {
@@ -104,6 +122,28 @@ export default function AdminDashboard() {
       unsubGuards();
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const storedHeight = window.localStorage.getItem(TABLE_PANEL_HEIGHT_STORAGE_KEY);
+    const preferredHeight = Number(storedHeight || Math.round(window.innerHeight * DEFAULT_DESKTOP_TABLE_RATIO));
+    setDesktopContentHeight(clampDesktopTableHeight(preferredHeight));
+
+    const handleResize = () => {
+      setDesktopContentHeight((current) => clampDesktopTableHeight(
+        current ?? Math.round(window.innerHeight * DEFAULT_DESKTOP_TABLE_RATIO),
+      ));
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || desktopContentHeight == null) return;
+    window.localStorage.setItem(TABLE_PANEL_HEIGHT_STORAGE_KEY, String(desktopContentHeight));
+  }, [desktopContentHeight]);
 
   const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : 'حدث خطأ غير متوقع.';
 
@@ -332,6 +372,32 @@ export default function AdminDashboard() {
   };
 
   const isManagementBusy = isBackupProcessing || isManualSyncing || isResettingServer;
+  const isToolsBusy = isManagementBusy || reportAction !== 'idle';
+
+  const handleTablePanelResizeStart = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (typeof window === 'undefined' || window.innerWidth < 768) return;
+
+    event.preventDefault();
+    const startHeight = desktopContentHeight ?? clampDesktopTableHeight(window.innerHeight * DEFAULT_DESKTOP_TABLE_RATIO);
+    const startY = event.clientY;
+
+    desktopResizeStateRef.current = { startY, startHeight };
+
+    const handlePointerMove = (moveEvent: MouseEvent) => {
+      const nextHeight = startHeight + (startY - moveEvent.clientY);
+      setDesktopContentHeight(clampDesktopTableHeight(nextHeight));
+    };
+
+    const handlePointerUp = () => {
+      desktopResizeStateRef.current = null;
+      window.removeEventListener('mousemove', handlePointerMove);
+      window.removeEventListener('mouseup', handlePointerUp);
+    };
+
+    window.addEventListener('mousemove', handlePointerMove);
+    window.addEventListener('mouseup', handlePointerUp);
+  };
+
   const statsCards = [
     { label: 'إجمالي المخازن', value: warehouses.length, icon: WarehouseIcon },
     { label: 'التصنيفات', value: categories.length, icon: Layers },
@@ -666,6 +732,207 @@ export default function AdminDashboard() {
   }, { total: 0, inbound: 0, outbound: 0 });
 
   const uniqueUnits = Array.from(new Set(items.map(item => item.unit))).filter(Boolean);
+  const currentReportConfig = (() => {
+    if (activeTab === 'warehouses') {
+      return {
+        title: 'تقرير المخازن',
+        filePrefix: 'enara-warehouses-report',
+        sheets: [
+          {
+            name: 'المخازن',
+            columns: [
+              { key: 'name', label: 'اسم المخزن' },
+              { key: 'location', label: 'الموقع' },
+              { key: 'locationUrl', label: 'رابط اللوكيشن' },
+              { key: 'createdAt', label: 'تاريخ الإنشاء' },
+            ],
+            rows: warehouses.map((warehouse) => ({
+              name: warehouse.name || '-',
+              location: warehouse.location || '-',
+              locationUrl: getWarehouseLocationHref(warehouse) || '-',
+              createdAt: warehouse.createdAt ? format(new Date(warehouse.createdAt), 'PP p', { locale: ar }) : '-',
+            })),
+          },
+        ] as ExportSheet[],
+      };
+    }
+
+    if (activeTab === 'categories') {
+      return {
+        title: 'تقرير الأقسام',
+        filePrefix: 'enara-categories-report',
+        sheets: [
+          {
+            name: 'الأقسام',
+            columns: [
+              { key: 'name', label: 'اسم القسم' },
+              { key: 'description', label: 'الوصف' },
+            ],
+            rows: categories.map((category) => ({
+              name: category.name || '-',
+              description: category.description || '-',
+            })),
+          },
+        ] as ExportSheet[],
+      };
+    }
+
+    if (activeTab === 'items') {
+      return {
+        title: itemViewMode === 'detailed' ? 'تقرير الأصناف والمخزون' : 'تقرير الأصناف المجمعة',
+        filePrefix: itemViewMode === 'detailed' ? 'enara-items-report' : 'enara-items-grouped-report',
+        sheets: (
+          itemViewMode === 'detailed'
+            ? [
+                {
+                  name: 'الأصناف',
+                  columns: [
+                    { key: 'name', label: 'الصنف' },
+                    { key: 'category', label: 'القسم' },
+                    { key: 'warehouse', label: 'المخزن' },
+                    { key: 'quantity', label: 'الكمية' },
+                    { key: 'unit', label: 'الوحدة' },
+                    { key: 'minQuantity', label: 'حد الطلب' },
+                    { key: 'updatedBy', label: 'بواسطة' },
+                    { key: 'lastUpdated', label: 'آخر تحديث' },
+                  ],
+                  rows: filteredItems.map((item) => ({
+                    name: item.name || '-',
+                    category: categoryNameById[item.categoryId] || 'غير محدد',
+                    warehouse: warehouseNameById[item.warehouseId] || 'غير محدد',
+                    quantity: item.quantity ?? 0,
+                    unit: item.unit || '-',
+                    minQuantity: item.minQuantity ?? 0,
+                    updatedBy: item.updatedBy || '-',
+                    lastUpdated: item.lastUpdated ? format(new Date(item.lastUpdated), 'PP p', { locale: ar }) : '-',
+                  })),
+                },
+              ]
+            : [
+                {
+                  name: 'الأصناف المجمعة',
+                  columns: [
+                    { key: 'name', label: 'الصنف' },
+                    { key: 'category', label: 'القسم' },
+                    { key: 'quantity', label: 'إجمالي الكمية' },
+                    { key: 'unit', label: 'الوحدة' },
+                    { key: 'minQuantity', label: 'حد الطلب' },
+                    { key: 'warehouses', label: 'التوزيع على المخازن' },
+                  ],
+                  rows: groupedItems.map((item: any) => ({
+                    name: item.name || '-',
+                    category: categoryNameById[item.categoryId] || 'غير محدد',
+                    quantity: item.quantity ?? 0,
+                    unit: item.unit || '-',
+                    minQuantity: item.minQuantity ?? 0,
+                    warehouses: Array.isArray(item.warehouseDetails) ? item.warehouseDetails.join(' | ') : '-',
+                  })),
+                },
+              ]
+        ) as ExportSheet[],
+      };
+    }
+
+    if (activeTab === 'transactions') {
+      return {
+        title: 'تقرير سجل الحركات',
+        filePrefix: 'enara-transactions-report',
+        sheets: [
+          {
+            name: 'الحركات',
+            columns: [
+              { key: 'date', label: 'التاريخ' },
+              { key: 'itemName', label: 'الصنف' },
+              { key: 'category', label: 'القسم' },
+              { key: 'warehouse', label: 'المخزن' },
+              { key: 'type', label: 'نوع الحركة' },
+              { key: 'quantity', label: 'الكمية' },
+              { key: 'projectName', label: 'المشروع/الموقع' },
+              { key: 'driverName', label: 'السائق' },
+              { key: 'carNumber', label: 'رقم السيارة' },
+              { key: 'guardName', label: 'الخفير' },
+              { key: 'user', label: 'بواسطة' },
+              { key: 'notes', label: 'ملاحظات' },
+            ],
+            rows: filteredTransactions.map((tx) => ({
+              date: tx.date ? format(new Date(tx.date), 'PP p', { locale: ar }) : '-',
+              itemName: tx.itemName || '-',
+              category: getTransactionCategoryName(tx),
+              warehouse: getTransactionWarehouseName(tx),
+              type: tx.type === 'in' ? 'إضافة (توريد)' : 'صرف (سحب)',
+              quantity: `${tx.type === 'in' ? '+' : '-'}${tx.quantity ?? 0}`,
+              projectName: tx.projectName || '-',
+              driverName: tx.driverName || '-',
+              carNumber: tx.carNumber || '-',
+              guardName: tx.guardName || '-',
+              user: tx.user || '-',
+              notes: tx.notes || '-',
+            })),
+          },
+        ] as ExportSheet[],
+      };
+    }
+
+    return {
+      title: 'تقرير الأفراد والمركبات',
+      filePrefix: 'enara-people-report',
+      sheets: [
+        {
+          name: 'السائقين',
+          columns: [{ key: 'name', label: 'اسم السائق' }],
+          rows: drivers.map((driver) => ({ name: driver.name || '-' })),
+        },
+        {
+          name: 'السيارات',
+          columns: [{ key: 'number', label: 'رقم السيارة' }],
+          rows: cars.map((car) => ({ number: car.number || '-' })),
+        },
+        {
+          name: 'الغفراء',
+          columns: [{ key: 'name', label: 'اسم الخفير' }],
+          rows: guards.map((guard) => ({ name: guard.name || '-' })),
+        },
+      ] as ExportSheet[],
+    };
+  })();
+
+  const runReportAction = async (
+    action: 'print' | 'pdf' | 'excel',
+    runner: () => Promise<void> | void,
+    successMessage: string,
+  ) => {
+    setReportAction(action);
+
+    try {
+      await runner();
+      markSyncSuccess(successMessage);
+    } catch (error) {
+      markSyncFailure(error, 'تعذر تنفيذ عملية التصدير أو الطباعة.');
+    } finally {
+      setReportAction('idle');
+    }
+  };
+
+  const handlePrintCurrentView = () =>
+    runReportAction(
+      'print',
+      () => printSheets(currentReportConfig.title, currentReportConfig.sheets),
+      'تم فتح نافذة الطباعة للعرض الحالي.',
+    );
+
+  const handleExportCurrentViewPdf = () =>
+    runReportAction(
+      'pdf',
+      () => exportSheetsToPdf(currentReportConfig.filePrefix, currentReportConfig.title, currentReportConfig.sheets),
+      'تم تصدير العرض الحالي إلى ملف PDF بنجاح.',
+    );
+
+  const handleExportCurrentViewExcel = () =>
+    runReportAction(
+      'excel',
+      () => exportSheetsToExcel(currentReportConfig.filePrefix, currentReportConfig.sheets),
+      'تم تصدير العرض الحالي إلى ملف Excel بنجاح.',
+    );
 
   const openEditModal = (type: string, item: any) => {
     setFormData(item);
@@ -723,7 +990,7 @@ export default function AdminDashboard() {
       {/* Main Content */}
       <div className="mb-20 flex min-h-0 flex-1 flex-col overflow-hidden md:mb-0 md:mr-64">
         {/* Top Header */}
-        <header className="dashboard-shell sticky top-0 z-40 flex min-h-20 items-center justify-between border-b border-white/60 px-4 py-4 md:px-8">
+        <header className="dashboard-shell sticky top-0 z-40 flex min-h-16 items-center justify-between border-b border-white/60 px-4 py-3 md:px-6">
           <h1 className="text-2xl font-black text-[#004d40]">
             {activeTab === 'items' && 'إدارة المنتجات'}
             {activeTab === 'categories' && 'إدارة التصنيفات'}
@@ -738,7 +1005,7 @@ export default function AdminDashboard() {
           </div>
         </header>
 
-        <main className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-28 pt-4 md:px-8 md:pb-8 md:pt-6">
+        <main className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-28 pt-3 md:px-6 md:pb-6 md:pt-4">
           <input
             ref={importFileRef}
             type="file"
@@ -747,35 +1014,35 @@ export default function AdminDashboard() {
             onChange={handleImportBackupFile}
           />
 
-          <div className="mb-6 grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
+          <div className="mb-2 grid gap-2 lg:grid-cols-[minmax(0,1fr)_210px]">
             <div className="grid grid-cols-3 gap-2 sm:gap-3">
               {statsCards.map((stat) => (
                 <div
                   key={stat.label}
-                  className="dashboard-panel group relative flex min-h-[94px] flex-col justify-between overflow-hidden rounded-[22px] px-3 py-3 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg sm:min-h-[96px] sm:flex-row sm:items-center sm:rounded-[24px] sm:px-5"
+                  className="dashboard-panel group relative flex min-h-[58px] flex-col justify-between overflow-hidden rounded-[18px] px-2.5 py-2 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg sm:min-h-[64px] sm:flex-row sm:items-center sm:rounded-[20px] sm:px-3"
                 >
                   <div className="absolute top-0 right-0 w-1.5 h-full bg-[#00bfa5]"></div>
                   <div className="min-w-0 pr-1 sm:pr-2">
-                    <h3 className="text-[11px] font-bold leading-4 text-gray-500 sm:text-sm">{stat.label}</h3>
-                    <p className="mt-1 text-xl font-black text-[#004d40] sm:text-[2rem]">{stat.value}</p>
+                    <h3 className="text-[9px] font-bold leading-3 text-gray-500 sm:text-[11px]">{stat.label}</h3>
+                    <p className="mt-0.5 text-base font-black text-[#004d40] sm:text-[1.6rem]">{stat.value}</p>
                   </div>
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-teal-50 text-[#00bfa5] transition-transform duration-300 group-hover:scale-105 sm:h-12 sm:w-12">
-                    <stat.icon className="h-4 w-4 sm:h-6 sm:w-6" />
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-teal-50 text-[#00bfa5] transition-transform duration-300 group-hover:scale-105 sm:h-9 sm:w-9 sm:rounded-2xl">
+                    <stat.icon className="h-3.5 w-3.5 sm:h-[18px] sm:w-[18px]" />
                   </div>
                 </div>
               ))}
             </div>
 
-            <div className="dashboard-panel flex min-h-[88px] flex-col justify-between gap-3 rounded-[24px] px-4 py-3 sm:min-h-[96px] sm:px-5">
-              <div className="flex items-start justify-between gap-3">
+            <div className="dashboard-panel flex min-h-[58px] flex-col justify-between gap-1.5 rounded-[18px] px-2.5 py-2 sm:min-h-[64px] sm:px-3">
+              <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="text-sm font-black text-[#004d40]">أدوات النسخ والمزامنة</p>
-                  <p className="mt-1 text-xs text-gray-500">
-                    فتح التصدير والاستيراد والمزامنة من نافذة مستقلة.
+                  <p className="text-[10px] font-black text-[#004d40] sm:text-xs">النسخ والمزامنة</p>
+                  <p className="mt-0.5 text-[9px] leading-3 text-gray-500 sm:text-[10px]">
+                    أدوات سريعة لنافذة مستقلة.
                   </p>
                 </div>
                 <div
-                  className={`mt-0.5 shrink-0 rounded-full p-2 ${
+                  className={`mt-0.5 shrink-0 rounded-full p-1 ${
                     syncState.tone === 'success'
                       ? 'bg-emerald-50 text-emerald-600'
                       : syncState.tone === 'error'
@@ -793,19 +1060,19 @@ export default function AdminDashboard() {
               </div>
               <Button
                 onClick={() => setIsDataToolsModalOpen(true)}
-                className="h-11 rounded-2xl bg-[#00bfa5] text-white hover:bg-[#00a68f]"
+                className="h-8 rounded-xl bg-[#00bfa5] px-2.5 text-[10px] text-white hover:bg-[#00a68f] sm:text-xs"
               >
-                <Download className="ml-2 h-4 w-4" />
-                فتح أدوات النسخ والمزامنة
+                <Download className="ml-1.5 h-3.5 w-3.5" />
+                فتح الأدوات
               </Button>
             </div>
           </div>
 
-          <div className="dashboard-panel mb-6 flex flex-col gap-3 rounded-[24px] px-4 py-3 sm:px-5">
-            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+          <div className="dashboard-panel mb-2 flex flex-col gap-1 rounded-[16px] px-2.5 py-1.5 sm:px-3">
+            <div className="flex flex-col gap-1 lg:flex-row lg:items-center lg:justify-between">
               <div className="min-w-0">
                 <span
-                  className={`inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${
+                  className={`inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold sm:text-[10px] ${
                     syncState.tone === 'success'
                       ? 'bg-emerald-50 text-emerald-700'
                       : syncState.tone === 'error'
@@ -815,29 +1082,42 @@ export default function AdminDashboard() {
                           : 'bg-slate-100 text-slate-700'
                   }`}
                 >
-                  {syncState.tone === 'success' && <CheckCircle2 className="h-4 w-4 shrink-0" />}
-                  {syncState.tone === 'error' && <AlertCircle className="h-4 w-4 shrink-0" />}
-                  {syncState.tone === 'syncing' && <RefreshCw className="h-4 w-4 shrink-0 animate-spin" />}
-                  {syncState.tone === 'idle' && <Download className="h-4 w-4 shrink-0" />}
+                  {syncState.tone === 'success' && <CheckCircle2 className="h-3 w-3 shrink-0" />}
+                  {syncState.tone === 'error' && <AlertCircle className="h-3 w-3 shrink-0" />}
+                  {syncState.tone === 'syncing' && <RefreshCw className="h-3 w-3 shrink-0 animate-spin" />}
+                  {syncState.tone === 'idle' && <Download className="h-3 w-3 shrink-0" />}
                   <span className="truncate">{syncState.message}</span>
                 </span>
               </div>
               {syncState.timestamp && (
-                <span className="text-xs font-medium text-gray-500">
+                <span className="text-[9px] font-medium text-gray-500 sm:text-[10px]">
                   آخر مزامنة: {format(new Date(syncState.timestamp), 'PP p', { locale: ar })}
                 </span>
               )}
             </div>
-            <p className="text-xs leading-6 text-gray-600 sm:text-sm">
-              تم نقل التصدير والاستيراد والمزامنة إلى نافذة منبثقة لتقليل المساحة المحجوزة أعلى الصفحة وتحسين العرض على الهاتف.
+            <p className="text-[9px] leading-3 text-gray-500 sm:text-[10px]">
+              أدوات النسخ والمزامنة متاحة من الزر أعلاه.
             </p>
           </div>
 
+          <div className="mb-2 hidden justify-center md:flex">
+            <div
+              onMouseDown={handleTablePanelResizeStart}
+              className="flex cursor-row-resize select-none items-center gap-2 rounded-full border border-white/70 bg-white/80 px-3 py-1 text-[10px] font-bold text-gray-500 shadow-sm backdrop-blur-sm transition-colors hover:bg-white"
+            >
+              <span className="inline-block h-1.5 w-8 rounded-full bg-gray-300"></span>
+              اسحب لتكبير أو تصغير مساحة الجداول
+            </div>
+          </div>
+
           {/* Content */}
-          <div className="dashboard-shell flex flex-1 flex-col overflow-visible rounded-[28px] p-4 md:min-h-0 md:overflow-hidden md:p-6">
+          <div
+            className="dashboard-shell flex flex-1 flex-col overflow-visible rounded-[24px] p-3 md:flex-none md:overflow-hidden md:p-4"
+            style={desktopContentHeight != null ? { height: `${desktopContentHeight}px` } : undefined}
+          >
           {activeTab === 'warehouses' && (
             <div className="flex flex-1 flex-col md:min-h-0 md:overflow-hidden">
-              <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 flex-shrink-0">
+              <div className="mb-3 flex flex-col justify-between gap-3 sm:flex-row sm:items-center flex-shrink-0">
                 <h2 className="text-lg font-semibold">المخازن</h2>
                 <Button onClick={() => { setFormData({}); setEditingId(null); setIsWarehouseModalOpen(true); }}>
                   <Plus className="ml-2 h-4 w-4" /> إضافة مخزن
@@ -927,7 +1207,7 @@ export default function AdminDashboard() {
 
           {activeTab === 'categories' && (
             <div className="flex flex-1 flex-col md:min-h-0 md:overflow-hidden">
-              <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 flex-shrink-0">
+              <div className="mb-3 flex flex-col justify-between gap-3 sm:flex-row sm:items-center flex-shrink-0">
                 <h2 className="text-lg font-semibold">التصنيفات</h2>
                 <div className="flex flex-wrap gap-2">
                   <Button variant="destructive" onClick={handleDeleteAllCategories}>
@@ -995,7 +1275,7 @@ export default function AdminDashboard() {
 
           {activeTab === 'items' && (
             <div className="flex flex-1 flex-col md:min-h-0 md:overflow-hidden">
-              <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 flex-shrink-0">
+              <div className="mb-3 flex flex-col justify-between gap-3 sm:flex-row sm:items-center flex-shrink-0">
                 <h2 className="text-lg font-semibold">الأصناف والمخزون</h2>
                 <div className="flex items-center gap-4">
                   <div className="flex bg-gray-100 p-1 rounded-lg">
@@ -1019,7 +1299,7 @@ export default function AdminDashboard() {
               </div>
 
               {/* Filters */}
-              <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:flex-wrap">
+              <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
                 <div className="relative flex-1 min-w-[200px]">
                   <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
                   <Input 
@@ -1267,42 +1547,42 @@ export default function AdminDashboard() {
             </div>
           )}
           {activeTab === 'transactions' && (
-            <div className="flex flex-1 flex-col md:min-h-0">
-              <div className="sticky-toolbar -mx-4 -mt-4 mb-4 px-4 pb-4 pt-4 md:-mx-6 md:-mt-6 md:px-6 md:pb-5 md:pt-5">
-                <div className="dashboard-panel rounded-3xl p-4 md:p-5">
-                  <div className="flex flex-col gap-4">
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-1 flex-col md:min-h-0 md:overflow-hidden">
+              <div className="sticky-toolbar -mx-3 -mt-3 mb-3 px-3 pb-3 pt-3 md:-mx-4 md:-mt-4 md:px-4 md:pb-4 md:pt-4">
+                <div className="dashboard-panel rounded-[24px] p-3 md:p-4">
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                       <div>
-                        <h2 className="text-lg font-black text-[#004d40]">سجل الحركات المخزنية</h2>
-                        <p className="mt-1 text-sm text-gray-600">تتبع الصرف والتوريد حسب القسم والمشروع مع بقاء شريط البحث والفلترة ثابتاً أثناء التصفح.</p>
+                        <h2 className="text-base font-black text-[#004d40] md:text-lg">سجل الحركات المخزنية</h2>
+                        <p className="mt-0.5 text-xs text-gray-600 md:text-sm">تتبع الصرف والتوريد حسب القسم والمشروع مع بقاء شريط البحث والفلترة ثابتاً أثناء التصفح.</p>
                       </div>
-                      <div className="grid grid-cols-3 gap-2 text-center text-xs font-semibold sm:flex sm:flex-wrap">
-                        <div className="rounded-2xl bg-white/75 px-3 py-2 text-gray-600">
-                          <span className="block text-[11px] text-gray-500">الحركات</span>
-                          <span className="mt-1 block text-base text-[#004d40]">{transactionSummary.total.toLocaleString('ar-EG')}</span>
+                      <div className="grid grid-cols-3 gap-2 text-center text-[10px] font-semibold sm:flex sm:flex-wrap sm:text-xs">
+                        <div className="rounded-xl bg-white/75 px-2.5 py-1.5 text-gray-600">
+                          <span className="block text-[10px] text-gray-500">الحركات</span>
+                          <span className="mt-0.5 block text-sm text-[#004d40] md:text-base">{transactionSummary.total.toLocaleString('ar-EG')}</span>
                         </div>
-                        <div className="rounded-2xl bg-emerald-50 px-3 py-2 text-emerald-700">
-                          <span className="block text-[11px] text-emerald-600">توريد</span>
-                          <span className="mt-1 block text-base">{transactionSummary.inbound.toLocaleString('ar-EG')}</span>
+                        <div className="rounded-xl bg-emerald-50 px-2.5 py-1.5 text-emerald-700">
+                          <span className="block text-[10px] text-emerald-600">توريد</span>
+                          <span className="mt-0.5 block text-sm md:text-base">{transactionSummary.inbound.toLocaleString('ar-EG')}</span>
                         </div>
-                        <div className="rounded-2xl bg-orange-50 px-3 py-2 text-orange-700">
-                          <span className="block text-[11px] text-orange-600">صرف</span>
-                          <span className="mt-1 block text-base">{transactionSummary.outbound.toLocaleString('ar-EG')}</span>
+                        <div className="rounded-xl bg-orange-50 px-2.5 py-1.5 text-orange-700">
+                          <span className="block text-[10px] text-orange-600">صرف</span>
+                          <span className="mt-0.5 block text-sm md:text-base">{transactionSummary.outbound.toLocaleString('ar-EG')}</span>
                         </div>
                       </div>
                     </div>
-                    <div className="grid gap-3 md:grid-cols-3">
+                    <div className="grid gap-2 md:grid-cols-3">
                       <div className="relative">
                         <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
                         <Input
                           placeholder="بحث بالصنف أو المشروع..."
-                          className="h-11 rounded-2xl border-white/70 bg-white/85 pr-10 shadow-sm"
+                          className="h-10 rounded-xl border-white/70 bg-white/85 pr-10 shadow-sm"
                           value={txSearchQuery}
                           onChange={(e) => setTxSearchQuery(e.target.value)}
                         />
                       </div>
                       <select
-                        className="flex h-11 rounded-2xl border border-white/70 bg-white/85 px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                        className="flex h-10 rounded-xl border border-white/70 bg-white/85 px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
                         value={txCategoryFilter}
                         onChange={(e) => setTxCategoryFilter(e.target.value)}
                       >
@@ -1310,7 +1590,7 @@ export default function AdminDashboard() {
                         {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
                       </select>
                       <select
-                        className="flex h-11 rounded-2xl border border-white/70 bg-white/85 px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+                        className="flex h-10 rounded-xl border border-white/70 bg-white/85 px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
                         value={txTypeFilter}
                         onChange={(e) => setTxTypeFilter(e.target.value)}
                       >
@@ -1464,12 +1744,12 @@ export default function AdminDashboard() {
             </div>
           )}
           {activeTab === 'people' && (
-            <div className="flex flex-1 flex-col gap-6 md:min-h-0">
-              <div className="grid flex-1 grid-cols-1 gap-6 md:min-h-0 md:grid-cols-3">
+            <div className="flex flex-1 flex-col gap-4 md:min-h-0 md:overflow-hidden">
+              <div className="grid flex-1 grid-cols-1 gap-4 md:min-h-0 md:grid-cols-3">
                 {/* Drivers */}
-                <Card className="dashboard-panel flex min-h-[280px] flex-col overflow-hidden md:min-h-0">
-                  <CardHeader className="bg-gray-50/50 border-b border-gray-100 pb-4 flex flex-row items-center justify-between">
-                    <CardTitle className="text-lg text-[#004d40]">السائقين</CardTitle>
+                <Card className="dashboard-panel flex min-h-[240px] flex-col overflow-hidden md:min-h-0">
+                  <CardHeader className="flex flex-row items-center justify-between border-b border-gray-100 bg-gray-50/50 pb-3">
+                    <CardTitle className="text-base text-[#004d40]">السائقين</CardTitle>
                     <Button onClick={() => { setFormData({}); setEditingId(null); setIsDriverModalOpen(true); }} size="sm" className="bg-[#00bfa5] hover:bg-[#00a08a] text-white">
                       <Plus className="h-4 w-4 ml-1" /> إضافة
                     </Button>
@@ -1510,9 +1790,9 @@ export default function AdminDashboard() {
                 </Card>
 
                 {/* Cars */}
-                <Card className="dashboard-panel flex min-h-[280px] flex-col overflow-hidden md:min-h-0">
-                  <CardHeader className="bg-gray-50/50 border-b border-gray-100 pb-4 flex flex-row items-center justify-between">
-                    <CardTitle className="text-lg text-[#004d40]">السيارات</CardTitle>
+                <Card className="dashboard-panel flex min-h-[240px] flex-col overflow-hidden md:min-h-0">
+                  <CardHeader className="flex flex-row items-center justify-between border-b border-gray-100 bg-gray-50/50 pb-3">
+                    <CardTitle className="text-base text-[#004d40]">السيارات</CardTitle>
                     <Button onClick={() => { setFormData({}); setEditingId(null); setIsCarModalOpen(true); }} size="sm" className="bg-[#00bfa5] hover:bg-[#00a08a] text-white">
                       <Plus className="h-4 w-4 ml-1" /> إضافة
                     </Button>
@@ -1553,9 +1833,9 @@ export default function AdminDashboard() {
                 </Card>
 
                 {/* Guards */}
-                <Card className="dashboard-panel flex min-h-[280px] flex-col overflow-hidden md:min-h-0">
-                  <CardHeader className="bg-gray-50/50 border-b border-gray-100 pb-4 flex flex-row items-center justify-between">
-                    <CardTitle className="text-lg text-[#004d40]">الغفراء</CardTitle>
+                <Card className="dashboard-panel flex min-h-[240px] flex-col overflow-hidden md:min-h-0">
+                  <CardHeader className="flex flex-row items-center justify-between border-b border-gray-100 bg-gray-50/50 pb-3">
+                    <CardTitle className="text-base text-[#004d40]">الغفراء</CardTitle>
                     <Button onClick={() => { setFormData({}); setEditingId(null); setIsGuardModalOpen(true); }} size="sm" className="bg-[#00bfa5] hover:bg-[#00a08a] text-white">
                       <Plus className="h-4 w-4 ml-1" /> إضافة
                     </Button>
@@ -1645,7 +1925,7 @@ export default function AdminDashboard() {
             <Button
               onClick={handleExportBackup}
               className="h-12 rounded-2xl bg-[#00bfa5] text-white hover:bg-[#00a68f]"
-              disabled={isManagementBusy}
+              disabled={isToolsBusy}
             >
               <Download className="ml-2 h-4 w-4" />
               {isBackupProcessing ? 'جاري التصدير...' : 'تصدير JSON'}
@@ -1654,7 +1934,7 @@ export default function AdminDashboard() {
               variant="outline"
               onClick={() => importFileRef.current?.click()}
               className="h-12 rounded-2xl border-teal-200 text-teal-700 hover:bg-teal-50"
-              disabled={isManagementBusy}
+              disabled={isToolsBusy}
             >
               <Upload className="ml-2 h-4 w-4" />
               استيراد JSON
@@ -1663,7 +1943,7 @@ export default function AdminDashboard() {
               variant="secondary"
               onClick={handleManualSync}
               className="h-12 rounded-2xl bg-slate-100 text-slate-800 hover:bg-slate-200"
-              disabled={isManagementBusy}
+              disabled={isToolsBusy}
             >
               <RefreshCw className={`ml-2 h-4 w-4 ${isManualSyncing ? 'animate-spin' : ''}`} />
               {isManualSyncing ? 'جاري المزامنة...' : 'مزامنة Firebase'}
@@ -1672,11 +1952,54 @@ export default function AdminDashboard() {
               variant="destructive"
               onClick={handleResetServerData}
               className="h-12 rounded-2xl"
-              disabled={isManagementBusy}
+              disabled={isToolsBusy}
             >
               <Trash2 className={`ml-2 h-4 w-4 ${isResettingServer ? 'animate-pulse' : ''}`} />
               {isResettingServer ? 'جاري التصفير...' : 'حذف جميع البيانات'}
             </Button>
+          </div>
+
+          <div className="rounded-[24px] border border-slate-200 bg-white/80 p-4">
+            <div className="mb-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h3 className="text-base font-black text-[#004d40]">تصدير وطباعة العرض الحالي</h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  سيتم استخدام التاب الحالي مع نفس البحث والفلاتر الظاهرة الآن.
+                </p>
+              </div>
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+                العرض الحالي: {currentReportConfig.title}
+              </span>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Button
+                variant="secondary"
+                onClick={handlePrintCurrentView}
+                className="h-12 rounded-2xl bg-slate-100 text-slate-800 hover:bg-slate-200"
+                disabled={isToolsBusy}
+              >
+                <Printer className="ml-2 h-4 w-4" />
+                {reportAction === 'print' ? 'جاري التحضير...' : 'طباعة'}
+              </Button>
+              <Button
+                onClick={handleExportCurrentViewPdf}
+                className="h-12 rounded-2xl bg-[#0f766e] text-white hover:bg-[#0b5c56]"
+                disabled={isToolsBusy}
+              >
+                <FileText className="ml-2 h-4 w-4" />
+                {reportAction === 'pdf' ? 'جاري التصدير...' : 'تصدير PDF'}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleExportCurrentViewExcel}
+                className="h-12 rounded-2xl border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                disabled={isToolsBusy}
+              >
+                <FileSpreadsheet className="ml-2 h-4 w-4" />
+                {reportAction === 'excel' ? 'جاري التصدير...' : 'تصدير Excel'}
+              </Button>
+            </div>
           </div>
         </div>
       </Modal>
