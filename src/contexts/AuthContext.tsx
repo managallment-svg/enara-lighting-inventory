@@ -3,6 +3,8 @@ import { User as FirebaseUser, onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 
+const ADMIN_EMAILS = ['managallment@gmail.com', 'naserf355@gmail.com', 'alkhoryaa@gmail.com', 'admin@enara.com'];
+
 interface UserProfile {
   uid: string;
   email: string;
@@ -31,15 +33,28 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         try {
           const userDocRef = doc(db, 'users', currentUser.uid);
           const userDoc = await getDoc(userDocRef);
+          const normalizedEmail = currentUser.email?.toLowerCase() || '';
+          const isAdminEmail = ADMIN_EMAILS.includes(normalizedEmail);
           
           if (userDoc.exists()) {
-            setProfile(userDoc.data() as UserProfile);
+            const existingProfile = userDoc.data() as UserProfile;
+
+            if (isAdminEmail && existingProfile.role !== 'admin') {
+              const elevatedProfile: UserProfile = {
+                ...existingProfile,
+                uid: currentUser.uid,
+                email: currentUser.email || existingProfile.email || '',
+                name: existingProfile.name || currentUser.displayName || currentUser.email?.split('@')[0] || 'مدير النظام',
+                role: 'admin',
+              };
+              await setDoc(userDocRef, elevatedProfile);
+              setProfile(elevatedProfile);
+            } else {
+              setProfile(existingProfile);
+            }
           } else {
             // Create new user profile, default to 'user' role
             // If it's the specific admin email, they get admin role (handled by rules, but we set it here too)
-            const adminEmails = ['managallment@gmail.com', 'naserf355@gmail.com', 'alkhoryaa@gmail.com'];
-            const isAdminEmail = currentUser.email && adminEmails.includes(currentUser.email.toLowerCase());
-            
             const newProfile: UserProfile = {
               uid: currentUser.uid,
               email: currentUser.email || '',
