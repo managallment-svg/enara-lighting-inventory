@@ -8,6 +8,11 @@ interface DeferredPromptEvent extends Event {
 const STORAGE_KEY = 'enara-pwa-install-dismissed';
 
 export default function PwaInstallPrompt() {
+  const isTauriDesktop = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    return '__TAURI_INTERNALS__' in window || '__TAURI__' in window;
+  }, []);
+
   const [installEvent, setInstallEvent] = useState<DeferredPromptEvent | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
@@ -67,7 +72,7 @@ export default function PwaInstallPrompt() {
   const showIosHint = isIos && !isStandalone && !dismissed;
   const showInstallButton = Boolean(installEvent) && !dismissed && !isStandalone;
 
-  if (!showIosHint && !showInstallButton) return null;
+  if (isTauriDesktop || (!showIosHint && !showInstallButton)) return null;
 
   return (
     <div className="pointer-events-none fixed inset-x-4 bottom-24 z-[90] md:bottom-6 md:left-6 md:right-auto md:max-w-sm" dir="rtl">

@@ -10,7 +10,7 @@ import { LogOut, Plus, Warehouse as WarehouseIcon, Layers, Package, Trash2, Edit
 import { format } from 'date-fns';
 import { ar } from 'date-fns/locale';
 import brandLogoFull from '../assets/brand-logo-full.png';
-import { createFullBackupPayload, downloadBackupJson, importBackupToFirestore, parseBackupJson, syncManagedCollections } from '../lib/dataManagement';
+import { createFullBackupPayload, downloadBackupJson, importBackupToFirestore, parseBackupJson, resetServerData, syncManagedCollections } from '../lib/dataManagement';
 
 type SyncState = 'idle' | 'syncing' | 'success' | 'error';
 
@@ -67,6 +67,7 @@ export default function AdminDashboard() {
   });
   const [isBackupProcessing, setIsBackupProcessing] = useState(false);
   const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const [isResettingServer, setIsResettingServer] = useState(false);
   const importFileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -153,8 +154,14 @@ export default function AdminDashboard() {
 
     try {
       const payload = await createFullBackupPayload(db, profile?.name || 'مدير النظام');
-      downloadBackupJson(payload);
-      markSyncSuccess('تم تصدير جميع البيانات والإعدادات إلى ملف JSON محلي بنجاح.');
+      const exportResult = await downloadBackupJson(payload);
+      const successMessage =
+        exportResult.method === 'browser-download'
+          ? 'تم تصدير جميع البيانات والإعدادات إلى ملف JSON محلي بنجاح.'
+          : exportResult.shareSheetOpened
+            ? `تم إنشاء الملف ${exportResult.fileName} وفتح نافذة الحفظ أو المشاركة. اختر "حفظ في الملفات" للاحتفاظ بالنسخة خارج التطبيق.`
+            : `تم إنشاء الملف ${exportResult.fileName} داخل مستندات التطبيق. إذا لم يظهر في مدير الملفات، أعد التصدير واختر الحفظ من نافذة المشاركة.`;
+      markSyncSuccess(successMessage);
     } catch (error) {
       markSyncFailure(error, 'تعذر تصدير النسخة الاحتياطية.');
     } finally {
@@ -185,7 +192,9 @@ export default function AdminDashboard() {
           }));
 
           try {
-            const result = await importBackupToFirestore(db, payload);
+            const result = await importBackupToFirestore(db, payload, {
+              preserveUserIds: profile?.uid ? [profile.uid] : [],
+            });
             markSyncSuccess(`تم استيراد النسخة الاحتياطية ومزامنة ${result.setCount.toLocaleString('ar-EG')} سجل مع Firebase.`);
           } catch (error) {
             markSyncFailure(error, 'تعذر استيراد النسخة الاحتياطية.');
@@ -224,6 +233,104 @@ export default function AdminDashboard() {
       setIsManualSyncing(false);
     }
   };
+
+  const handleDeleteTransaction = async (tx: any) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'حذف حركة مخزنية',
+      message: `سيتم حذف الحركة الخاصة بالصنف "${tx.itemName}" مع إلغاء أثرها من السجل${tx.itemId ? ' وتحديث رصيد الصنف المرتبط بها' : ''}. هل تريد المتابعة؟`,
+      onConfirm: async () => {
+        setConfirmDialog((previous) => ({ ...previous, isOpen: false }));
+
+        const linkedItem = items.find((item) => item.id === tx.itemId);
+        const quantity = Number(tx.quantity || 0);
+
+        if (!linkedItem || !Number.isFinite(quantity) || quantity <= 0) {
+          await runSyncedMutation(async () => {
+            await deleteDoc(doc(db, 'transactions', tx.id));
+          }, 'تم حذف الحركة من السجل. لم يتم تعديل الرصيد لأن الصنف المرتبط بها غير متاح حالياً.');
+          return;
+        }
+
+        const revertedQuantity = tx.type === 'in'
+          ? linkedItem.quantity - quantity
+          : linkedItem.quantity + quantity;
+
+        if (revertedQuantity < 0) {
+          markSyncFailure(
+            new Error('لا يمكن حذف حركة التوريد لأن الرصيد الحالي أقل من كمية هذه الحركة.'),
+            'تعذر حذف الحركة المخزنية.',
+          );
+          return;
+        }
+
+        const batch = writeBatch(db);
+        batch.delete(doc(db, 'transactions', tx.id));
+        batch.update(doc(db, 'items', linkedItem.id), {
+          quantity: revertedQuantity,
+          lastUpdated: new Date().toISOString(),
+          updatedBy: profile?.name || 'Admin',
+        });
+
+        await runSyncedMutation(async () => {
+          await batch.commit();
+        }, 'تم حذف الحركة وتحديث رصيد الصنف المرتبط بها على Firebase.');
+      }
+    });
+  };
+
+  const handleResetServerData = async () => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'تصفير جميع بيانات السيرفر',
+      message: 'سيتم حذف جميع المخازن والأقسام والأصناف والحركات والسائقين والسيارات والغفراء والمستخدمين والإعدادات من Firebase، مع الاحتفاظ بحساب المدير الحالي فقط حتى لا تفقد صلاحية الدخول. هل تريد المتابعة؟',
+      onConfirm: async () => {
+        setConfirmDialog((previous) => ({ ...previous, isOpen: false }));
+        setIsResettingServer(true);
+        setSyncState((current) => ({
+          tone: 'syncing',
+          message: 'جاري حذف جميع بيانات التطبيق من Firebase وإعادة التهيئة...',
+          timestamp: current.timestamp,
+        }));
+
+        try {
+          const result = await resetServerData(db, {
+            preserveUserIds: profile?.uid ? [profile.uid] : [],
+          });
+
+          setSearchQuery('');
+          setFilterWarehouse('all');
+          setFilterCategory('all');
+          setFilterUnit('all');
+          setTxSearchQuery('');
+          setTxTypeFilter('all');
+          setTxCategoryFilter('all');
+          setItemViewMode('detailed');
+          setActiveTab('items');
+          setFormData({});
+          setEditingId(null);
+          setTransactionData({ type: 'out' });
+          setSelectedItemForTx(null);
+          setTransactionError(null);
+          setIsWarehouseModalOpen(false);
+          setIsCategoryModalOpen(false);
+          setIsItemModalOpen(false);
+          setIsTransactionModalOpen(false);
+          setIsDriverModalOpen(false);
+          setIsCarModalOpen(false);
+          setIsGuardModalOpen(false);
+
+          markSyncSuccess(`تم حذف ${result.deleteCount.toLocaleString('ar-EG')} سجل من السيرفر، وعادت بيانات التطبيق إلى حالة البداية مع الاحتفاظ بحساب المدير الحالي.`);
+        } catch (error) {
+          markSyncFailure(error, 'تعذر حذف جميع البيانات من السيرفر.');
+        } finally {
+          setIsResettingServer(false);
+        }
+      }
+    });
+  };
+
+  const isManagementBusy = isBackupProcessing || isManualSyncing || isResettingServer;
 
   const handleSaveWarehouse = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -704,7 +811,7 @@ export default function AdminDashboard() {
                 <Button
                   onClick={handleExportBackup}
                   className="rounded-2xl bg-[#00bfa5] text-white hover:bg-[#00a68f]"
-                  disabled={isBackupProcessing || isManualSyncing}
+                  disabled={isManagementBusy}
                 >
                   <Download className="ml-2 h-4 w-4" />
                   {isBackupProcessing ? 'جاري التصدير...' : 'تصدير JSON'}
@@ -713,7 +820,7 @@ export default function AdminDashboard() {
                   variant="outline"
                   onClick={() => importFileRef.current?.click()}
                   className="rounded-2xl border-teal-200 text-teal-700 hover:bg-teal-50"
-                  disabled={isBackupProcessing || isManualSyncing}
+                  disabled={isManagementBusy}
                 >
                   <Upload className="ml-2 h-4 w-4" />
                   استيراد JSON
@@ -722,10 +829,19 @@ export default function AdminDashboard() {
                   variant="secondary"
                   onClick={handleManualSync}
                   className="rounded-2xl bg-slate-100 text-slate-800 hover:bg-slate-200"
-                  disabled={isBackupProcessing || isManualSyncing}
+                  disabled={isManagementBusy}
                 >
                   <RefreshCw className={`ml-2 h-4 w-4 ${isManualSyncing ? 'animate-spin' : ''}`} />
                   {isManualSyncing ? 'جاري المزامنة...' : 'مزامنة Firebase'}
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={handleResetServerData}
+                  className="rounded-2xl"
+                  disabled={isManagementBusy}
+                >
+                  <Trash2 className={`ml-2 h-4 w-4 ${isResettingServer ? 'animate-pulse' : ''}`} />
+                  {isResettingServer ? 'جاري التصفير...' : 'حذف جميع البيانات'}
                 </Button>
               </div>
             </div>
@@ -1276,6 +1392,17 @@ export default function AdminDashboard() {
                           <p className="text-sm text-gray-700">{tx.notes}</p>
                         </div>
                       )}
+                      <div className="mt-3 flex justify-end border-t border-white/70 pt-3">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                          onClick={() => handleDeleteTransaction(tx)}
+                        >
+                          <Trash2 className="ml-1 h-4 w-4" />
+                          حذف الحركة
+                        </Button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -1297,12 +1424,13 @@ export default function AdminDashboard() {
                       <th className="px-4 py-3">الخفير</th>
                       <th className="px-4 py-3">بواسطة</th>
                       <th className="px-4 py-3">ملاحظات</th>
+                      <th className="px-4 py-3">إجراءات</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {filteredTransactions.length === 0 ? (
                       <tr>
-                        <td colSpan={12} className="px-4 py-8 text-center text-gray-500">
+                        <td colSpan={13} className="px-4 py-8 text-center text-gray-500">
                           لا توجد حركات مطابقة للبحث الحالي
                         </td>
                       </tr>
@@ -1331,6 +1459,16 @@ export default function AdminDashboard() {
                           <td className="px-4 py-3 text-xs">{tx.guardName || '-'}</td>
                           <td className="px-4 py-3 text-xs">{tx.user || '-'}</td>
                           <td className="max-w-[220px] truncate px-4 py-3 text-xs text-gray-500" title={tx.notes}>{tx.notes || '-'}</td>
+                          <td className="px-4 py-3">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                              onClick={() => handleDeleteTransaction(tx)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </td>
                         </tr>
                       ))
                     )}

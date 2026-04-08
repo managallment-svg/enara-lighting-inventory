@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.enara.inventory.desktop",
   "build": {
-    "frontendDist": "../dist",
+    "frontendDist": "../dist-tauri",
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build:web"
+    "beforeBuildCommand": "npm run build:desktop"
   },
   "app": {
     "windows": [

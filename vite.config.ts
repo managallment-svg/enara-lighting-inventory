@@ -1,16 +1,21 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig, loadEnv} from 'vite';
+import {defineConfig, loadEnv, type PluginOption} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
-  return {
-    base: './',
-    plugins: [
-      react(),
-      tailwindcss(),
+  const isTauriDesktopBuild =
+    Boolean(process.env.TAURI_ENV_PLATFORM) || process.env.ENARA_DESKTOP_BUILD === '1';
+
+  const plugins: PluginOption[] = [
+    react(),
+    tailwindcss(),
+  ];
+
+  if (!isTauriDesktopBuild) {
+    plugins.push(
       VitePWA({
         registerType: 'autoUpdate',
         manifestFilename: 'manifest.webmanifest',
@@ -58,7 +63,12 @@ export default defineConfig(({mode}) => {
           ],
         },
       }),
-    ],
+    );
+  }
+
+  return {
+    base: './',
+    plugins,
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },
@@ -68,8 +78,6 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify; file watching is disabled to prevent flickering during agent edits.
       host: '0.0.0.0',
       port: 3000,
       hmr: process.env.DISABLE_HMR !== 'true',

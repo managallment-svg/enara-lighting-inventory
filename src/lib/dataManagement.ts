@@ -1,3 +1,6 @@
+import { Capacitor } from '@capacitor/core';
+import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 import { collection, doc, getDocs, writeBatch, type Firestore } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -25,6 +28,7 @@ type CollectionSnapshot = Partial<Record<CollectionName, any[]>>;
 const APP_NAME = 'إدارة مخازن إنارة';
 const BACKUP_VERSION = 1;
 const BATCH_LIMIT = 400;
+const BACKUP_FOLDER_NAME = 'enara-backups';
 
 export interface BackupPayload {
   version: number;
@@ -37,6 +41,14 @@ export interface BackupPayload {
     projectId: string;
   };
   collections: Partial<Record<BackupCollectionName, any[]>>;
+}
+
+export interface BackupExportResult {
+  fileName: string;
+  method: 'browser-download' | 'native-file';
+  filePath?: string;
+  fileUri?: string;
+  shareSheetOpened: boolean;
 }
 
 interface PendingOperation {
@@ -64,6 +76,71 @@ function normalizeDocument(entry: unknown, fallbackId: string) {
       ...candidate,
       id,
     },
+  };
+}
+
+function buildBackupFileName(payload: BackupPayload) {
+  const dateToken = payload.exportedAt.slice(0, 19).replace(/[:T]/g, '-');
+  return `enara-backup-${dateToken}.json`;
+}
+
+async function ensureNativeExportPermissions() {
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') {
+    return;
+  }
+
+  const permissionStatus = await Filesystem.checkPermissions();
+  if (permissionStatus.publicStorage === 'granted') {
+    return;
+  }
+
+  const requestedStatus = await Filesystem.requestPermissions();
+  if (requestedStatus.publicStorage !== 'granted') {
+    throw new Error('تم رفض صلاحية الوصول إلى المستندات، لذلك تعذر حفظ ملف النسخة الاحتياطية على الجهاز.');
+  }
+}
+
+async function saveNativeBackupFile(fileName: string, jsonText: string): Promise<BackupExportResult> {
+  await ensureNativeExportPermissions();
+
+  const filePath = `${BACKUP_FOLDER_NAME}/${fileName}`;
+  const writeResult = await Filesystem.writeFile({
+    path: filePath,
+    data: jsonText,
+    directory: Directory.Documents,
+    encoding: Encoding.UTF8,
+    recursive: true,
+  });
+
+  const fileUri = writeResult.uri || (await Filesystem.getUri({ path: filePath, directory: Directory.Documents })).uri;
+  let shareSheetOpened = false;
+
+  try {
+    const shareAvailability = await Share.canShare();
+    if (shareAvailability.value) {
+      await Share.share({
+        title: 'تصدير النسخة الاحتياطية',
+        text: `تم إنشاء الملف ${fileName}. اختر "حفظ في الملفات" أو أي تطبيق مناسب للاحتفاظ به خارج التطبيق.`,
+        files: [fileUri],
+        dialogTitle: 'حفظ أو مشاركة النسخة الاحتياطية',
+      });
+      shareSheetOpened = true;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? '').toLowerCase();
+    const isCancelled = message.includes('cancel');
+
+    if (!isCancelled) {
+      console.warn('تعذر فتح نافذة المشاركة بعد حفظ النسخة الاحتياطية.', error);
+    }
+  }
+
+  return {
+    fileName,
+    method: 'native-file',
+    filePath,
+    fileUri,
+    shareSheetOpened,
   };
 }
 
@@ -133,10 +210,15 @@ export async function createFullBackupPayload(database: Firestore, exportedBy = 
   return buildBackupPayload(collectionsData, exportedBy);
 }
 
-export function downloadBackupJson(payload: BackupPayload) {
-  const dateToken = payload.exportedAt.slice(0, 19).replace(/[:T]/g, '-');
-  const fileName = `enara-backup-${dateToken}.json`;
-  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+export async function downloadBackupJson(payload: BackupPayload): Promise<BackupExportResult> {
+  const fileName = buildBackupFileName(payload);
+  const jsonText = JSON.stringify(payload, null, 2);
+
+  if (Capacitor.isNativePlatform()) {
+    return saveNativeBackupFile(fileName, jsonText);
+  }
+
+  const blob = new Blob([jsonText], {
     type: 'application/json;charset=utf-8',
   });
   const url = URL.createObjectURL(blob);
@@ -147,6 +229,12 @@ export function downloadBackupJson(payload: BackupPayload) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+
+  return {
+    fileName,
+    method: 'browser-download',
+    shareSheetOpened: false,
+  };
 }
 
 export function parseBackupJson(rawText: string): BackupPayload {
@@ -194,10 +282,14 @@ async function applyCollectionsSnapshot(
   database: Firestore,
   collectionsData: CollectionSnapshot,
   collectionNames: readonly string[],
+  options?: {
+    preserveUserIds?: string[];
+  },
 ) {
   const operations: PendingOperation[] = [];
   let setCount = 0;
   let deleteCount = 0;
+  const preserveUserIds = new Set((options?.preserveUserIds ?? []).map((id) => String(id)));
 
   for (const collectionName of collectionNames) {
     const incomingDocs = getSafeArray(collectionsData[collectionName as CollectionName]);
@@ -209,6 +301,10 @@ async function applyCollectionsSnapshot(
 
     existingSnapshot.docs.forEach((existingDoc) => {
       if (!nextIds.has(existingDoc.id)) {
+        if (collectionName === 'users' && preserveUserIds.has(existingDoc.id)) {
+          return;
+        }
+
         operations.push({
           kind: 'delete',
           collectionName,
@@ -238,8 +334,14 @@ async function applyCollectionsSnapshot(
   };
 }
 
-export async function importBackupToFirestore(database: Firestore, payload: BackupPayload) {
-  return applyCollectionsSnapshot(database, payload.collections, payload.includedCollections);
+export async function importBackupToFirestore(
+  database: Firestore,
+  payload: BackupPayload,
+  options?: {
+    preserveUserIds?: string[];
+  },
+) {
+  return applyCollectionsSnapshot(database, payload.collections, payload.includedCollections, options);
 }
 
 export async function syncManagedCollections(
@@ -247,4 +349,39 @@ export async function syncManagedCollections(
   collectionsData: Partial<Record<ManagedCollectionName, any[]>>,
 ) {
   return applyCollectionsSnapshot(database, collectionsData, MANAGED_COLLECTIONS);
+}
+
+export async function resetServerData(
+  database: Firestore,
+  options?: {
+    preserveUserIds?: string[];
+  },
+) {
+  const preserveUserIds = new Set((options?.preserveUserIds ?? []).map((id) => String(id)));
+  const operations: PendingOperation[] = [];
+  let deleteCount = 0;
+
+  for (const collectionName of BACKUP_COLLECTIONS) {
+    const snapshot = await getDocs(collection(database, collectionName));
+
+    snapshot.docs.forEach((entry) => {
+      if (collectionName === 'users' && preserveUserIds.has(entry.id)) {
+        return;
+      }
+
+      operations.push({
+        kind: 'delete',
+        collectionName,
+        id: entry.id,
+      });
+      deleteCount += 1;
+    });
+  }
+
+  await commitOperations(database, operations);
+
+  return {
+    collectionCount: BACKUP_COLLECTIONS.length,
+    deleteCount,
+  };
 }
