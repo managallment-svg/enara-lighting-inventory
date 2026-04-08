@@ -27,7 +27,10 @@ type CollectionSnapshot = Partial<Record<CollectionName, any[]>>;
 
 const APP_NAME = 'إدارة مخازن إنارة';
 const BACKUP_VERSION = 1;
-const BATCH_LIMIT = 400;
+// Firestore security rules for this project call get() inside isAdmin(),
+// so large batched writes can fail with permission-denied once the rules
+// hit the document-access limit for a single atomic request.
+const BATCH_LIMIT = 12;
 const BACKUP_FOLDER_NAME = 'enara-backups';
 
 export interface BackupPayload {
@@ -170,7 +173,16 @@ async function commitOperations(database: Firestore, operations: PendingOperatio
       batch.set(ref, operation.data ?? {});
     });
 
-    await batch.commit();
+    try {
+      await batch.commit();
+    } catch (error: any) {
+      if (error?.code === 'permission-denied') {
+        throw new Error(
+          'رفض Firestore تنفيذ دفعة من عمليات الاستيراد أو المزامنة. تم تقليص حجم الدفعات لحل حد الصلاحيات المرتبط بالقواعد، لكن ما زالت هناك وثيقة أو قاعدة تمنع العملية.',
+        );
+      }
+      throw error;
+    }
   }
 }
 
@@ -315,6 +327,10 @@ async function applyCollectionsSnapshot(
     });
 
     normalizedDocs.forEach((entry) => {
+      if (collectionName === 'users' && preserveUserIds.has(entry.id)) {
+        return;
+      }
+
       operations.push({
         kind: 'set',
         collectionName,
