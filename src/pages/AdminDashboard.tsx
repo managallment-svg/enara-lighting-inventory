@@ -15,11 +15,6 @@ import { exportSheetsToExcel, exportSheetsToPdf, printSheets, type ExportSheet }
 
 type SyncState = 'idle' | 'syncing' | 'success' | 'error';
 
-const TABLE_PANEL_HEIGHT_STORAGE_KEY = 'enara-admin-table-panel-height';
-const MIN_DESKTOP_TABLE_HEIGHT = 420;
-const MAX_DESKTOP_TABLE_OFFSET = 180;
-const DEFAULT_DESKTOP_TABLE_RATIO = 0.74;
-
 export default function AdminDashboard() {
   const { profile } = useAuth();
   const [activeTab, setActiveTab] = useState<'warehouses' | 'categories' | 'items' | 'transactions' | 'people'>('items');
@@ -76,18 +71,7 @@ export default function AdminDashboard() {
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const [isResettingServer, setIsResettingServer] = useState(false);
   const [reportAction, setReportAction] = useState<'idle' | 'print' | 'pdf' | 'excel'>('idle');
-  const [desktopContentHeight, setDesktopContentHeight] = useState<number | null>(null);
   const importFileRef = useRef<HTMLInputElement | null>(null);
-  const desktopResizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
-
-  const clampDesktopTableHeight = (value: number) => {
-    if (typeof window === 'undefined') {
-      return Math.max(MIN_DESKTOP_TABLE_HEIGHT, value);
-    }
-
-    const maxHeight = Math.max(MIN_DESKTOP_TABLE_HEIGHT, window.innerHeight - MAX_DESKTOP_TABLE_OFFSET);
-    return Math.max(MIN_DESKTOP_TABLE_HEIGHT, Math.min(Math.round(value), maxHeight));
-  };
 
   useEffect(() => {
     const unsubWarehouses = onSnapshot(collection(db, 'warehouses'), (snapshot) => {
@@ -122,28 +106,6 @@ export default function AdminDashboard() {
       unsubGuards();
     };
   }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const storedHeight = window.localStorage.getItem(TABLE_PANEL_HEIGHT_STORAGE_KEY);
-    const preferredHeight = Number(storedHeight || Math.round(window.innerHeight * DEFAULT_DESKTOP_TABLE_RATIO));
-    setDesktopContentHeight(clampDesktopTableHeight(preferredHeight));
-
-    const handleResize = () => {
-      setDesktopContentHeight((current) => clampDesktopTableHeight(
-        current ?? Math.round(window.innerHeight * DEFAULT_DESKTOP_TABLE_RATIO),
-      ));
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || desktopContentHeight == null) return;
-    window.localStorage.setItem(TABLE_PANEL_HEIGHT_STORAGE_KEY, String(desktopContentHeight));
-  }, [desktopContentHeight]);
 
   const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : 'حدث خطأ غير متوقع.';
 
@@ -373,30 +335,6 @@ export default function AdminDashboard() {
 
   const isManagementBusy = isBackupProcessing || isManualSyncing || isResettingServer;
   const isToolsBusy = isManagementBusy || reportAction !== 'idle';
-
-  const handleTablePanelResizeStart = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (typeof window === 'undefined' || window.innerWidth < 768) return;
-
-    event.preventDefault();
-    const startHeight = desktopContentHeight ?? clampDesktopTableHeight(window.innerHeight * DEFAULT_DESKTOP_TABLE_RATIO);
-    const startY = event.clientY;
-
-    desktopResizeStateRef.current = { startY, startHeight };
-
-    const handlePointerMove = (moveEvent: MouseEvent) => {
-      const nextHeight = startHeight + (startY - moveEvent.clientY);
-      setDesktopContentHeight(clampDesktopTableHeight(nextHeight));
-    };
-
-    const handlePointerUp = () => {
-      desktopResizeStateRef.current = null;
-      window.removeEventListener('mousemove', handlePointerMove);
-      window.removeEventListener('mouseup', handlePointerUp);
-    };
-
-    window.addEventListener('mousemove', handlePointerMove);
-    window.addEventListener('mouseup', handlePointerUp);
-  };
 
   const statsCards = [
     { label: 'إجمالي المخازن', value: warehouses.length, icon: WarehouseIcon },
@@ -1005,7 +943,7 @@ export default function AdminDashboard() {
           </div>
         </header>
 
-        <main className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-28 pt-3 md:px-6 md:pb-6 md:pt-4">
+        <main className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-28 pt-3 md:overflow-hidden md:px-6 md:pb-6 md:pt-4">
           <input
             ref={importFileRef}
             type="file"
@@ -1100,21 +1038,8 @@ export default function AdminDashboard() {
             </p>
           </div>
 
-          <div className="mb-2 hidden justify-center md:flex">
-            <div
-              onMouseDown={handleTablePanelResizeStart}
-              className="flex cursor-row-resize select-none items-center gap-2 rounded-full border border-white/70 bg-white/80 px-3 py-1 text-[10px] font-bold text-gray-500 shadow-sm backdrop-blur-sm transition-colors hover:bg-white"
-            >
-              <span className="inline-block h-1.5 w-8 rounded-full bg-gray-300"></span>
-              اسحب لتكبير أو تصغير مساحة الجداول
-            </div>
-          </div>
-
           {/* Content */}
-          <div
-            className="dashboard-shell flex flex-1 flex-col overflow-visible rounded-[24px] p-3 md:flex-none md:overflow-hidden md:p-4"
-            style={desktopContentHeight != null ? { height: `${desktopContentHeight}px` } : undefined}
-          >
+          <div className="dashboard-shell flex flex-1 flex-col overflow-visible rounded-[24px] p-3 md:min-h-0 md:overflow-hidden md:p-4">
           {activeTab === 'warehouses' && (
             <div className="flex flex-1 flex-col md:min-h-0 md:overflow-hidden">
               <div className="mb-3 flex flex-col justify-between gap-3 sm:flex-row sm:items-center flex-shrink-0">
